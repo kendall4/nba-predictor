@@ -173,8 +173,8 @@ with tab_nba:
         st.stop()
 
     # Sub-tabs inside NBA
-    tab_leader, tab_predict, tab_hot, tab_sgp, tab_lines = st.tabs([
-        "🏆 Leaderboard", "📈 Predictions", "🔥 Hot Hand", "🎰 Live SGP", "📊 Lines Explorer"
+    tab_leader, tab_predict, tab_hot, tab_sgp, tab_lines, tab_player = st.tabs([
+        "🏆 Leaderboard", "📈 Predictions", "🔥 Hot Hand", "🎰 Live SGP", "📊 Lines Explorer", "🧑‍💻 Player Explorer"
     ])
 
     with tab_leader:
@@ -267,10 +267,94 @@ with tab_nba:
         if team_filter:
             df = df[df['Team'].isin(team_filter)]
         if opp_filter:
-            df = df[df['Opponent'].inisin(opp_filter)]
+            df = df[df['Opponent'].isin(opp_filter)]
         df = df[df['Value'] >= min_value_filter]
         df = df.sort_values('Value', ascending=False)
         st.dataframe(df, use_container_width=True, hide_index=True)
+
+    with tab_player:
+        st.header("🧑‍💻 Player Explorer")
+        st.caption("Search a player, view recent logs, check lines and EV")
+        # Build searchable list (from predictions + tracker roster)
+        tracker = HotHandTracker(blend_mode="latest")
+        names_pred = sorted(predictions['player_name'].unique().tolist())
+        names_roster = sorted(tracker.players['PLAYER_NAME'].unique().tolist()) if 'PLAYER_NAME' in tracker.players.columns else []
+        all_names = sorted(set(names_pred) | set(names_roster))
+        selected_player = st.selectbox("Search Player", options=all_names)
+        # Recent games
+        recent_n = st.slider("Recent games", 3, 20, 10)
+        logs = tracker.get_player_gamelog(selected_player, season='2025-26')
+        if logs is None or len(logs) == 0:
+            st.info("No gamelogs found for 2025-26.")
+        else:
+            show_cols = [c for c in ['GAME_DATE','MATCHUP','PTS','REB','AST','FG3M'] if c in logs.columns]
+            st.subheader("Recent Game Logs")
+            st.dataframe(logs[show_cols].head(recent_n), use_container_width=True, hide_index=True)
+
+        # Lines and EV
+        st.markdown("---")
+        st.subheader("Lines & Expected Value")
+        stat = st.selectbox("Stat", options=["points","rebounds","assists","threes"], index=0, key="player_explorer_stat")
+        # Suggest a line from predictions if available
+        base_line = 0.0
+        row = predictions[predictions['player_name'] == selected_player].head(1)
+        if len(row) == 1:
+            if stat == 'points':
+                base_line = float(row.iloc[0]['line_points'])
+            elif stat == 'rebounds':
+                base_line = float(row.iloc[0]['line_rebounds'])
+            elif stat == 'assists':
+                base_line = float(row.iloc[0]['line_assists'])
+        if stat == 'threes' and logs is not None and 'FG3M' in logs.columns:
+            base_line = float(max(2.5, logs['FG3M'].head(recent_n).mean()))
+        line_value = st.number_input("Main line", min_value=0.0, max_value=100.0, value=float(base_line), step=0.5, key="player_explorer_line")
+        main_odds = st.number_input("Main line odds (American)", value=-110, step=5, key="player_explorer_odds")
+
+        # Derive a prediction for this stat
+        pred_val = None
+        if len(row) == 1:
+            if stat == 'points' and 'pred_points' in row.columns:
+                pred_val = float(row.iloc[0]['pred_points'])
+            elif stat == 'rebounds' and 'pred_rebounds' in row.columns:
+                pred_val = float(row.iloc[0]['pred_rebounds'])
+            elif stat == 'assists' and 'pred_assists' in row.columns:
+                pred_val = float(row.iloc[0]['pred_assists'])
+        if pred_val is None and logs is not None:
+            col_map = {'points':'PTS','rebounds':'REB','assists':'AST','threes':'FG3M'}
+            sc = col_map.get(stat)
+            if sc in logs.columns:
+                pred_val = float(logs[sc].head(recent_n).mean())
+
+        if pred_val is not None:
+            st.write(f"Model estimate: {pred_val:.2f} {stat}")
+            # EV for main line
+            optimizer = AltLineOptimizer()
+            prob_over = optimizer.calculate_probability_over(pred_val, line_value)
+            ev_main = optimizer.calculate_ev(prob_over, int(main_odds))
+            st.write(f"Main line EV: {ev_main:+.1%} (P(over) {prob_over:.1%})")
+
+        # Optional alt lines CSV
+        st.markdown("---")
+        st.subheader("📤 Upload Alt Lines CSV (optional)")
+        st.caption("Columns: line, over, under (American odds)")
+        file = st.file_uploader("Upload alt lines CSV", type=["csv"], key="player_explorer_csv")
+        if file is not None and pred_val is not None:
+            try:
+                odds_df = pd.read_csv(file)
+                if all(c in odds_df.columns for c in ['line','over','under']):
+                    optimizer = AltLineOptimizer()
+                    result = optimizer.optimize_lines(
+                        player_name=selected_player,
+                        stat_type=stat,
+                        prediction=pred_val,
+                        alt_lines=odds_df[['line','over','under']].to_dict('records')
+                    )
+                    st.write(f"Best: {result['best_direction']} {result['best_line']} at {int(result['best_odds']):+} | EV {result['best_ev']:+.1%}")
+                    st.dataframe(result['all_lines'], use_container_width=True)
+                else:
+                    st.error("CSV must contain columns: line, over, under")
+            except Exception as e:
+                st.error(f"Error reading CSV: {e}")
 
 with tab_nfl:
     st.header("NFL Player Props (beta)")
