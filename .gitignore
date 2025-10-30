@@ -5,3 +5,18 @@ __pycache__/
 .DS_Store
 *.pkl
 *.joblib
+
+# Cache and data
+data/cache/
+data/processed/*.csv
+
+# Model files (too large for git)
+src/models/saved/*.pkl
+
+# Streamlit
+.streamlit/secrets.toml
+
+# IDE
+.vscode/
+.idea/
+*.swp

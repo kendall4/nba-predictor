@@ -12,13 +12,50 @@ def render(predictions):
     all_names = sorted(set(names_pred) | set(names_roster))
     selected_player = st.selectbox("Search Player", options=all_names)
     recent_n = st.slider("Recent games", 3, 20, 10)
-    logs = tracker.get_player_gamelog(selected_player, season='2025-26')
+    
+    # Fetch gamelogs with timeout handling
+    logs = None
+    with st.spinner(f"Loading {selected_player}'s game logs..."):
+        try:
+            logs = tracker.get_player_gamelog(selected_player, season='2025-26')
+        except Exception as e:
+            st.warning(f"⚠️ Could not fetch gamelogs: {e}")
+            st.info("💡 Try again or check if player name matches NBA API format")
+            logs = None
+    
     if logs is None or len(logs) == 0:
-        st.info("No gamelogs found for 2025-26.")
+        st.info("No gamelogs found for 2025-26. Gamelogs are cached after first fetch - try again in a moment.")
     else:
         show_cols = [c for c in ['GAME_DATE','MATCHUP','PTS','REB','AST','FG3M'] if c in logs.columns]
         st.subheader("Recent Game Logs")
         st.dataframe(logs[show_cols].head(recent_n), use_container_width=True, hide_index=True)
+        
+        # Show H2H summary if player has opponent today
+        row = predictions[predictions['player_name'] == selected_player].head(1)
+        if len(row) == 1:
+            opp = row.iloc[0]['opponent']
+            st.markdown("---")
+            st.subheader(f"H2H vs {opp}")
+            try:
+                from src.utils.h2h_stats import get_h2h_summary
+                h2h_summary = get_h2h_summary(selected_player, opp, season='2025-26')
+                if h2h_summary:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Games", h2h_summary['total_games'])
+                        st.metric("Avg PTS", f"{h2h_summary['avg_pts']:.1f}")
+                    with col2:
+                        st.metric("Avg REB", f"{h2h_summary['avg_reb']:.1f}")
+                        st.metric("Avg AST", f"{h2h_summary['avg_ast']:.1f}")
+                    with col3:
+                        if h2h_summary.get('recent_vs_older'):
+                            trend = h2h_summary['recent_vs_older']['trend']
+                            st.write(f"**Trend:** {trend.upper()}")
+                            st.write(f"Recent 3: {h2h_summary['recent_vs_older']['recent_avg_pts']:.1f} PPG")
+                else:
+                    st.info("No H2H data available (will include previous season if needed)")
+            except Exception as e:
+                st.caption(f"H2H summary unavailable: {e}")
 
     st.markdown("---")
     st.subheader("Lines & Expected Value")

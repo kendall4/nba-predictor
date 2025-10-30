@@ -84,8 +84,15 @@ class HotHandTracker:
             except Exception:
                 pass
 
-        logs = playergamelog.PlayerGameLog(player_id=pid, season=season, season_type_all_star='Regular Season')
-        df = logs.get_data_frames()[0]
+        # Fetch from NBA API with timeout handling
+        try:
+            logs = playergamelog.PlayerGameLog(player_id=pid, season=season, season_type_all_star='Regular Season')
+            df = logs.get_data_frames()[0]
+        except Exception as e:
+            # If API call fails (timeout, rate limit, etc.), return None
+            # UI will show friendly message
+            return None
+        
         wanted_cols = ['GAME_DATE', 'MATCHUP', 'PTS', 'REB', 'AST', 'FG3M']
         for c in wanted_cols:
             if c not in df.columns:
@@ -141,14 +148,45 @@ class HotHandTracker:
         return rate
 
     def consistency_h2h(self, player_name, stat_type, line, opponent_tricode, season='2025-26'):
-        df = self.get_player_gamelog(player_name, season=season)
-        if df is None or df.empty:
+        """
+        Get H2H consistency. If current season has < 5 games, include previous season.
+        Returns last 5 H2H games total (prioritizing current season, then previous).
+        """
+        h2h_games = []
+        
+        # Try current season first
+        df_current = self.get_player_gamelog(player_name, season=season)
+        if df_current is not None and not df_current.empty:
+            df_current = df_current.copy()
+            df_current['OPP'] = df_current['MATCHUP'].apply(self._parse_opponent_from_matchup)
+            h2h_current = df_current[df_current['OPP'] == opponent_tricode]
+            if len(h2h_current) > 0:
+                h2h_games.append(h2h_current)
+        
+        # If we don't have at least 5 games, try previous season
+        total_h2h = len(h2h_games[0]) if h2h_games else 0
+        if total_h2h < 5:
+            prev_season = '2024-25' if season == '2025-26' else '2025-26'
+            df_prev = self.get_player_gamelog(player_name, season=prev_season)
+            if df_prev is not None and not df_prev.empty:
+                df_prev = df_prev.copy()
+                df_prev['OPP'] = df_prev['MATCHUP'].apply(self._parse_opponent_from_matchup)
+                h2h_prev = df_prev[df_prev['OPP'] == opponent_tricode]
+                if len(h2h_prev) > 0:
+                    h2h_games.append(h2h_prev)
+        
+        # Combine all H2H games and take last 5
+        if not h2h_games:
             return {'player': player_name, 'scope': f'H2H vs {opponent_tricode}', 'stat': stat_type, 'line': line, 'games': 0, 'hits': 0, 'hit_rate': 0.0}
-        df = df.copy()
-        df['OPP'] = df['MATCHUP'].apply(self._parse_opponent_from_matchup)
-        h2h = df[df['OPP'] == opponent_tricode]
-        rate = self._calc_hit_rate(h2h, stat_type, line)
-        rate.update({'player': player_name, 'scope': f'H2H vs {opponent_tricode}', 'stat': stat_type, 'line': line})
+        
+        h2h_combined = pd.concat(h2h_games, ignore_index=True)
+        # Sort by date descending (newest first), take last 5
+        if 'GAME_DATE' in h2h_combined.columns:
+            h2h_combined = h2h_combined.sort_values('GAME_DATE', ascending=False)
+        h2h_final = h2h_combined.head(5)
+        
+        rate = self._calc_hit_rate(h2h_final, stat_type, line)
+        rate.update({'player': player_name, 'scope': f'H2H vs {opponent_tricode} (last 5)', 'stat': stat_type, 'line': line})
         return rate
 
     # ---------------------------

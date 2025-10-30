@@ -1,5 +1,7 @@
 import pandas as pd
 import numpy as np
+import joblib
+import os
 
 class MatchupFeatureBuilder:
     """
@@ -88,9 +90,29 @@ class MatchupFeatureBuilder:
         self.players = players_all
         self.pace = pace_blended
 
-        print(f"✅ Loaded data (two-season blend: {blend_mode})")
-        print(f"  Players: {len(self.players)} rows across 2024-25 and 2025-26")
-        print(f"  Teams:   {len(self.pace)} teams with blended ratings")
+        # Try to load ML models (if trained)
+        self.ml_models = {}
+        self.use_ml = False
+        model_dir = 'src/models/saved'
+        for stat in ['PTS', 'REB', 'AST']:
+            model_path = f"{model_dir}/{stat}_predictor.pkl"
+            if os.path.exists(model_path):
+                try:
+                    self.ml_models[stat] = joblib.load(model_path)
+                    self.use_ml = True
+                except Exception as e:
+                    print(f"⚠️  Could not load {stat} model: {e}")
+        
+        if self.use_ml:
+            print(f"✅ Loaded data (two-season blend: {blend_mode})")
+            print(f"  Players: {len(self.players)} rows across 2024-25 and 2025-26")
+            print(f"  Teams:   {len(self.pace)} teams with blended ratings")
+            print(f"  🤖 ML Models: Loaded ({', '.join(self.ml_models.keys())})")
+        else:
+            print(f"✅ Loaded data (two-season blend: {blend_mode})")
+            print(f"  Players: {len(self.players)} rows across 2024-25 and 2025-26")
+            print(f"  Teams:   {len(self.pace)} teams with blended ratings")
+            print(f"  📊 Using heuristic predictions (train ML models for better accuracy)")
     
     def get_player_features(self, player_name, opponent_team):
         """
@@ -152,12 +174,34 @@ class MatchupFeatureBuilder:
             'opponent_off_rating': opp['OFF_RATING'],
             'pace_factor': pace_factor,
             'def_factor': def_factor,
-            
-            # Simple prediction (we'll improve this with ML later)
-            'predicted_points': player['PTS'] * pace_factor * def_factor,
-            'predicted_rebounds': player['REB'] * pace_factor,
-            'predicted_assists': player['AST'] * pace_factor,
         }
+        
+        # PREDICTION: Use ML if available, else heuristics
+        if self.use_ml and all(stat in self.ml_models for stat in ['PTS', 'REB', 'AST']):
+            # Build feature array (same order as training)
+            feature_array = np.array([[
+                features['season_ppg'],
+                features['season_rpg'],
+                features['season_apg'],
+                features['season_fg_pct'],
+                features['games_played'],
+                features['minutes'],
+                features['expected_pace'],
+                features['opponent_def_rating'],
+                features['opponent_off_rating'],
+                features['pace_factor'],
+                features['def_factor']
+            ]])
+            
+            # ML predictions
+            features['predicted_points'] = float(self.ml_models['PTS'].predict(feature_array)[0])
+            features['predicted_rebounds'] = float(self.ml_models['REB'].predict(feature_array)[0])
+            features['predicted_assists'] = float(self.ml_models['AST'].predict(feature_array)[0])
+        else:
+            # Fallback to heuristics (simple multipliers)
+            features['predicted_points'] = player['PTS'] * pace_factor * def_factor
+            features['predicted_rebounds'] = player['REB'] * pace_factor
+            features['predicted_assists'] = player['AST'] * pace_factor
         
         return features
     
