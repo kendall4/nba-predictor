@@ -146,100 +146,66 @@ with tab_nba:
     st.markdown("---")
 
     # Generate predictions button
-        if st.button("🔮 Generate Predictions", type="primary", use_container_width=True):
-    
-    with st.spinner("Analyzing all players... This takes ~30 seconds"):
-        analyzer = ValueAnalyzer()
-        predictions = analyzer.analyze_games(games)
-        
-        # Filter by minutes
-        predictions = predictions[predictions['minutes'] >= min_minutes]
-        
-        # Filter by value
-        predictions = predictions[predictions['overall_value'] >= min_value]
-        
-        # Sort by value
-        predictions = predictions.sort_values('overall_value', ascending=False)
-    
+    if st.button("🔮 Generate Predictions", type="primary", use_container_width=True):
+        with st.spinner("Analyzing all players... This takes ~30 seconds"):
+            analyzer = ValueAnalyzer()
+            predictions = analyzer.analyze_games(games)
+            # Filter by minutes
+            predictions = predictions[predictions['minutes'] >= min_minutes]
+            # Filter by value
+            predictions = predictions[predictions['overall_value'] >= min_value]
+            # Sort by value
+            predictions = predictions.sort_values('overall_value', ascending=False)
+
         st.success(f"✅ Generated predictions for {len(predictions)} players!")
-    
-    # Top Value Plays
+
+        # Top Value Plays
         st.header("💎 Top Value Plays")
-    
-    top_n = min(10, len(predictions))
-    
-    for i in range(top_n):
-        player = predictions.iloc[i]
-        
-        with st.expander(f"#{i+1}: {player['player_name']} ({player['team']} vs {player['opponent']}) - Value: {player['overall_value']:.1f}", expanded=i<3):
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.metric("Minutes", f"{player['minutes']:.0f}")
-                st.metric("Expected Pace", f"{player['expected_pace']:.1f}")
-            
-            with col2:
-                st.metric("Opponent DEF", f"{player['opponent_def_rating']:.1f}")
-                
-                if player['overall_value'] > 1:
-                    st.success("📈 BET OVER")
-                elif player['overall_value'] < -1:
-                    st.error("📉 BET UNDER")
-                else:
-                    st.info("➡️ NEUTRAL")
-            
-            with col3:
-                st.metric("Value Score", f"{player['overall_value']:.2f}")
-            
-            st.markdown("#### 🎯 Predictions vs Season Average")
-            
-            pred_col1, pred_col2, pred_col3 = st.columns(3)
-            
-            with pred_col1:
-                st.metric(
-                    "Points", 
-                    f"{player['pred_points']:.1f}",
-                    f"{player['point_value']:+.1f} vs avg"
-                )
-            
-            with pred_col2:
-                st.metric(
-                    "Rebounds", 
-                    f"{player['pred_rebounds']:.1f}",
-                    f"{player['rebound_value']:+.1f} vs avg"
-                )
-            
-            with pred_col3:
-                st.metric(
-                    "Assists", 
-                    f"{player['pred_assists']:.1f}",
-                    f"{player['assist_value']:+.1f} vs avg"
-                )
-    
+
+        top_n = min(10, len(predictions))
+        for i in range(top_n):
+            player = predictions.iloc[i]
+            with st.expander(f"#{i+1}: {player['player_name']} ({player['team']} vs {player['opponent']}) - Value: {player['overall_value']:.1f}", expanded=i<3):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Minutes", f"{player['minutes']:.0f}")
+                    st.metric("Expected Pace", f"{player['expected_pace']:.1f}")
+                with col2:
+                    st.metric("Opponent DEF", f"{player['opponent_def_rating']:.1f}")
+                    if player['overall_value'] > 1:
+                        st.success("📈 BET OVER")
+                    elif player['overall_value'] < -1:
+                        st.error("📉 BET UNDER")
+                    else:
+                        st.info("➡️ NEUTRAL")
+                with col3:
+                    st.metric("Value Score", f"{player['overall_value']:.2f}")
+                st.markdown("#### 🎯 Predictions vs Season Average")
+                pred_col1, pred_col2, pred_col3 = st.columns(3)
+                with pred_col1:
+                    st.metric("Points", f"{player['pred_points']:.1f}", f"{player['point_value']:+.1f} vs avg")
+                with pred_col2:
+                    st.metric("Rebounds", f"{player['pred_rebounds']:.1f}", f"{player['rebound_value']:+.1f} vs avg")
+                with pred_col3:
+                    st.metric("Assists", f"{player['pred_assists']:.1f}", f"{player['assist_value']:+.1f} vs avg")
+
         # Full data table
         st.markdown("---")
         st.header("📊 All Predictions")
-    
-    display_df = predictions[[
-        'player_name', 'team', 'opponent', 
-        'pred_points', 'pred_rebounds', 'pred_assists',
-        'overall_value', 'expected_pace', 'opponent_def_rating'
-    ]].copy()
-    
-    display_df.columns = [
-        'Player', 'Team', 'Opponent',
-        'Pred Points', 'Pred Rebounds', 'Pred Assists',
-        'Value Score', 'Pace', 'Opp DEF'
-    ]
-    
-        st.dataframe(
-            display_df,
-            use_container_width=True,
-            hide_index=True
-        )
-    
-    # Download button
-    csv = predictions.to_csv(index=False)
+        display_df = predictions[[
+            'player_name', 'team', 'opponent', 
+            'pred_points', 'pred_rebounds', 'pred_assists',
+            'overall_value', 'expected_pace', 'opponent_def_rating'
+        ]].copy()
+        display_df.columns = [
+            'Player', 'Team', 'Opponent',
+            'Pred Points', 'Pred Rebounds', 'Pred Assists',
+            'Value Score', 'Pace', 'Opp DEF'
+        ]
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+        # Download button
+        csv = predictions.to_csv(index=False)
         st.download_button(
             "📥 Download Full Predictions (CSV)",
             csv,
@@ -248,9 +214,9 @@ with tab_nba:
             use_container_width=True
         )
 
-    # =============================
-    # Consistency & Alt-Line EV UI
-    # =============================
+        # =============================
+        # Consistency & Alt-Line EV UI
+        # =============================
         if enable_consistency or enable_ev:
             st.markdown("---")
             st.header("🧪 Consistency & Alt Lines")
@@ -274,7 +240,6 @@ with tab_nba:
             elif stat == 'assists':
                 suggested_line = float(sel_row.iloc[0]['line_assists'])
             else:
-                # If threes not available, default to 2.5
                 suggested_line = 2.5
 
         line_value = st.number_input("Line (can override)", min_value=0.0, max_value=100.0, value=float(suggested_line), step=0.5)
@@ -284,19 +249,14 @@ with tab_nba:
             st.subheader("📈 Consistency (2025-26)")
             tracker = HotHandTracker(blend_mode="latest")
             N_LIST = [5, 6, 7, 8, 10, 15]
-
-            # Build quick opponent map from today's games
             opp_map = {}
             for g in games:
                 opp_map[g['home']] = g['away']
                 opp_map[g['away']] = g['home']
-
-            # Determine player's team to find today's opponent if scheduled
             opp_text = None
             if len(sel_row) == 1:
                 team = sel_row.iloc[0]['team']
                 opp_text = opp_map.get(team)
-
             cols_cons = st.columns(3)
             with cols_cons[0]:
                 st.markdown("**Last N Games**")
@@ -335,10 +295,8 @@ with tab_nba:
                     prediction=pred_points,
                     alt_lines=ladder
                 )
-                # Present summary
                 best_line = result['best_line']; best_dir = result['best_direction']; best_odds = result['best_odds']; best_ev = result['best_ev']
                 st.write(f"Best: {best_dir} {best_line} at {best_odds:+} | EV {best_ev:+.1%}")
-                # Show table
                 st.dataframe(result['all_lines'], use_container_width=True)
             else:
                 st.info("Prediction not available for points.")
@@ -352,7 +310,6 @@ with tab_nba:
             if file is not None and stat == 'points' and len(sel_row) == 1:
                 try:
                     odds_df = pd.read_csv(file)
-                    # Validate
                     if all(c in odds_df.columns for c in ['line','over','under']):
                         optimizer = AltLineOptimizer()
                         result = optimizer.optimize_lines(
