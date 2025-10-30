@@ -4,6 +4,8 @@ from src.features.matchup_features import MatchupFeatureBuilder
 from src.analysis.value_analyzer import ValueAnalyzer
 from nba_api.live.nba.endpoints import scoreboard
 from datetime import datetime
+from src.analysis.hot_hand_tracker import HotHandTracker
+from src.analysis.alt_line_optimizer import AltLineOptimizer
 
 # Page config
 st.set_page_config(
@@ -92,6 +94,10 @@ with st.sidebar:
     st.markdown("2. See AI predictions")
     st.markdown("3. Find value plays")
     st.markdown("4. Compare to Vegas odds")
+    st.markdown("---")
+    st.subheader("🧪 Consistency & Odds")
+    enable_consistency = st.toggle("Enable Consistency Checker", value=True)
+    enable_ev = st.toggle("Enable Alt-Line EV (points)", value=True)
 
 # Get today's games
 @st.cache_data(ttl=300)  # Cache for 5 minutes
@@ -237,6 +243,101 @@ if st.button("🔮 Generate Predictions", type="primary", use_container_width=Tr
         "text/csv",
         use_container_width=True
     )
+
+    # =============================
+    # Consistency & Alt-Line EV UI
+    # =============================
+    if enable_consistency or enable_ev:
+        st.markdown("---")
+        st.header("🧪 Consistency & Alt Lines")
+
+        # Player selection
+        player_list = predictions['player_name'].unique().tolist()
+        default_player = player_list[0] if player_list else ""
+        selected_player = st.selectbox("Select Player", options=player_list, index=0 if default_player else None)
+
+        # Stat selection
+        stat = st.selectbox("Stat", options=["points", "rebounds", "assists", "threes"], index=0)
+
+        # Suggested line: use season avg from predictions row
+        sel_row = predictions[predictions['player_name'] == selected_player].head(1)
+        suggested_line = 0.0
+        if len(sel_row) == 1:
+            if stat == 'points':
+                suggested_line = float(sel_row.iloc[0]['line_points'])
+            elif stat == 'rebounds':
+                suggested_line = float(sel_row.iloc[0]['line_rebounds'])
+            elif stat == 'assists':
+                suggested_line = float(sel_row.iloc[0]['line_assists'])
+            else:
+                # If threes not available, default to 2.5
+                suggested_line = 2.5
+
+        line_value = st.number_input("Line (can override)", min_value=0.0, max_value=100.0, value=float(suggested_line), step=0.5)
+
+        # Run Consistency
+        if enable_consistency:
+            st.subheader("📈 Consistency (2025-26)")
+            tracker = HotHandTracker(blend_mode="latest")
+            N_LIST = [5, 6, 7, 8, 10, 15]
+
+            # Build quick opponent map from today's games
+            opp_map = {}
+            for g in games:
+                opp_map[g['home']] = g['away']
+                opp_map[g['away']] = g['home']
+
+            # Determine player's team to find today's opponent if scheduled
+            opp_text = None
+            if len(sel_row) == 1:
+                team = sel_row.iloc[0]['team']
+                opp_text = opp_map.get(team)
+
+            cols_cons = st.columns(3)
+            with cols_cons[0]:
+                st.markdown("**Last N Games**")
+                for n in N_LIST:
+                    rate = tracker.consistency_last_n(selected_player, stat, line_value, n=n, season='2025-26')
+                    st.write(f"Last {n}: {rate['hits']}/{rate['games']} → {rate['hit_rate']:.0%}")
+            with cols_cons[1]:
+                st.markdown("**Head-to-Head (Today)**")
+                if isinstance(opp_text, str):
+                    h2h = tracker.consistency_h2h(selected_player, stat, line_value, opponent_tricode=opp_text, season='2025-26')
+                    st.write(f"vs {opp_text}: {h2h['hits']}/{h2h['games']} → {h2h['hit_rate']:.0%}")
+                else:
+                    st.write("No opponent mapped for today")
+            with cols_cons[2]:
+                st.markdown("**Full Season**")
+                seas = tracker.consistency_season(selected_player, stat, line_value, season='2025-26')
+                st.write(f"2025-26: {seas['hits']}/{seas['games']} → {seas['hit_rate']:.0%}")
+
+        # Alt-line EV (points only, using model prediction)
+        if enable_ev and stat == 'points' and len(sel_row) == 1:
+            st.subheader("💎 Alt Line EV (sample ladder)")
+            pred_points = float(sel_row.iloc[0]['pred_points']) if 'pred_points' in sel_row.columns else None
+            if pred_points is not None:
+                base = float(line_value)
+                ladder = [
+                    {"line": max(0.5, base - 4.0), "over": -160, "under": 130},
+                    {"line": base - 2.0, "over": -120, "under": 100},
+                    {"line": base, "over": -110, "under": -110},
+                    {"line": base + 2.0, "over": 120, "under": -150},
+                    {"line": base + 4.0, "over": 220, "under": -280},
+                ]
+                optimizer = AltLineOptimizer()
+                result = optimizer.optimize_lines(
+                    player_name=selected_player,
+                    stat_type='points',
+                    prediction=pred_points,
+                    alt_lines=ladder
+                )
+                # Present summary
+                best_line = result['best_line']; best_dir = result['best_direction']; best_odds = result['best_odds']; best_ev = result['best_ev']
+                st.write(f"Best: {best_dir} {best_line} at {best_odds:+} | EV {best_ev:+.1%}")
+                # Show table
+                st.dataframe(result['all_lines'], use_container_width=True)
+            else:
+                st.info("Prediction not available for points.")
 
 # Footer
 st.markdown("---")
