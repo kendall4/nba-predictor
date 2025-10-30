@@ -1,13 +1,13 @@
 import pandas as pd
 
 print("=" * 70)
-print("📊 EXPLORING 2024-25 TRAINING DATA")
+print("📊 EXPLORING 2025-26 TRAINING DATA")
 print("=" * 70)
 
 # Load all the data
-games = pd.read_csv('data/raw/games_2024-25.csv')
-pace = pd.read_csv('data/raw/team_pace_2024-25.csv')
-players = pd.read_csv('data/raw/player_stats_2024-25.csv')
+games = pd.read_csv('data/raw/games_2025-26.csv')
+pace = pd.read_csv('data/raw/team_pace_2025-26.csv')
+players = pd.read_csv('data/raw/player_stats_2025-26.csv')
 
 print(f"\n📈 DATA SUMMARY:")
 print(f"  Total games: {len(games):,}")

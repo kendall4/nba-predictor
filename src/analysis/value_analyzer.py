@@ -11,7 +11,7 @@ class ValueAnalyzer:
     """
     
     def __init__(self):
-        self.builder = MatchupFeatureBuilder()
+        self.builder = MatchupFeatureBuilder(blend_mode="latest")
     
     def analyze_games(self, games_today, odds_lines=None):
         """

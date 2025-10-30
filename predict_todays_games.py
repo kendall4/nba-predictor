@@ -96,3 +96,107 @@ print("  1. Compare predictions vs actual Vegas odds")
 print("  2. High value score + weak opponent defense = GOOD BET")
 print("  3. Low value score + strong opponent defense = AVOID")
 print("=" * 70)
+
+# ==============================
+# Optional Tools and Diagnostics
+# ==============================
+
+USE_ALT_LINE_OPTIMIZER = True
+USE_LIVE_SGP_ANALYZER = False
+RUN_CONSISTENCY_CHECKS = True
+
+from src.analysis.alt_line_optimizer import AltLineOptimizer
+from src.analysis.live_sgp_analyzer import LiveSGPAnalyzer
+from src.analysis.hot_hand_tracker import HotHandTracker
+
+# ------------------------------
+# Consistency checks (config)
+# ------------------------------
+consistency_targets = []
+
+# Auto-fill some targets from top plays if not specified
+if RUN_CONSISTENCY_CHECKS and not consistency_targets and len(predictions) > 0:
+    auto_sample = predictions.head(5)
+    for _, row in auto_sample.iterrows():
+        consistency_targets.append({
+            'player': row['player_name'],
+            'stat': 'points',
+            'line': float(row['line_points'])
+        })
+
+if RUN_CONSISTENCY_CHECKS and consistency_targets:
+    print("\n" + "=" * 70)
+    print("📈 CONSISTENCY CHECKS")
+    print("=" * 70)
+    tracker = HotHandTracker(blend_mode="latest")
+    N_LIST = [5, 6, 7, 8, 10, 15]
+    # Build quick opponent map from today's games
+    opp_map = {}
+    for g in todays_games:
+        opp_map[g['home']] = g['away']
+        opp_map[g['away']] = g['home']
+
+    for target in consistency_targets:
+        player = target['player']
+        stat = target['stat']
+        line = float(target['line'])
+        print(f"\n— {player} | {stat} ≥ {line}")
+
+        # last N windows
+        for n in N_LIST:
+            rate = tracker.consistency_last_n(player, stat, line, n=n, season='2025-26')
+            print(f"  Last {n}: {rate['hits']}/{rate['games']} hit → {rate['hit_rate']:.0%}")
+
+        # H2H vs today's opponent if known (use player's team from predictions)
+        row = predictions[predictions['player_name'] == player].head(1)
+        if len(row) == 1:
+            team = row.iloc[0]['team']
+            opp = opp_map.get(team)
+            if isinstance(opp, str):
+                h2h = tracker.consistency_h2h(player, stat, line, opponent_tricode=opp, season='2025-26')
+                print(f"  H2H vs {opp}: {h2h['hits']}/{h2h['games']} → {h2h['hit_rate']:.0%}")
+
+        # full season
+        seas = tracker.consistency_season(player, stat, line, season='2025-26')
+        print(f"  Season 2025-26: {seas['hits']}/{seas['games']} → {seas['hit_rate']:.0%}")
+
+# ------------------------------
+# Alt Line Optimizer (optional)
+# ------------------------------
+if USE_ALT_LINE_OPTIMIZER and len(predictions) > 0:
+    print("\n" + "=" * 70)
+    print("💎 ALT LINE OPTIMIZER (sample)")
+    print("=" * 70)
+    optimizer = AltLineOptimizer()
+    sample = predictions.head(3)
+    for _, p in sample.iterrows():
+        base = float(p['line_points'])
+        alt_lines = [
+            {'line': max(0.5, base - 4.0), 'over': -160, 'under': +130},
+            {'line': base - 2.0, 'over': -120, 'under': +100},
+            {'line': base, 'over': -110, 'under': -110},
+            {'line': base + 2.0, 'over': +120, 'under': -150},
+            {'line': base + 4.0, 'over': +220, 'under': -280},
+        ]
+        result = optimizer.optimize_lines(
+            player_name=p['player_name'],
+            stat_type='points',
+            prediction=float(p['pred_points']),
+            alt_lines=alt_lines
+        )
+        optimizer.display_optimization(result)
+
+# ------------------------------
+# Live SGP Analyzer (optional)
+# ------------------------------
+if USE_LIVE_SGP_ANALYZER:
+    print("\n" + "=" * 70)
+    print("🎰 LIVE SGP ANALYZER (scaffold)")
+    print("=" * 70)
+    sgp = LiveSGPAnalyzer()
+    legs = [
+        {'player': 'Player A', 'stat': 'points', 'line': 20, 'current': 14},
+        {'player': 'Player B', 'stat': 'rebounds', 'line': 8, 'current': 6},
+    ]
+    analysis = sgp.analyze_parlay(legs=legs, time_left_seconds=240, odds=10000)
+    sgp.display_analysis(analysis)

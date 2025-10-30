@@ -8,38 +8,68 @@ class MatchupFeatureBuilder:
     - Opponent defense (DEF_RATING)
     - Team pace (PACE)
     """
-    
-    def __init__(self):
-        # Load 2024-25 training data
-        self.players = pd.read_csv('data/raw/player_stats_2024-25.csv')
-        self.pace = pd.read_csv('data/raw/team_pace_2024-25.csv')
-        
-        # Create mapping from team abbreviation to full name
-        # We'll build this from the player data
-        team_mapping = self.players[['TEAM_ABBREVIATION', 'TEAM_ID']].drop_duplicates()
-        
-        # Merge to get team names
-        self.pace = self.pace.merge(
-            team_mapping, 
-            left_on='TEAM_ID', 
-            right_on='TEAM_ID',
-            how='inner'
-        )
-        
-        # Filter to just NBA teams (30 teams)
+
+    def __init__(self, blend_mode: str = "mean"):
+        # Load both seasons for players
+        p1 = pd.read_csv('data/raw/player_stats_2024-25.csv')
+        p1['SEASON'] = '2024-25'
+        p2 = pd.read_csv('data/raw/player_stats_2025-26.csv')
+        p2['SEASON'] = '2025-26'
+        players_all = pd.concat([p1, p2], ignore_index=True)
+
+        # Load both seasons for team pace/ratings
+        t1 = pd.read_csv('data/raw/team_pace_2024-25.csv')
+        t1['SEASON'] = '2024-25'
+        t2 = pd.read_csv('data/raw/team_pace_2025-26.csv')
+        t2['SEASON'] = '2025-26'
+        pace_all = pd.concat([t1, t2], ignore_index=True)
+
+        # Filter to NBA teams (30)
         nba_teams = [
             'ATL', 'BOS', 'BKN', 'CHA', 'CHI', 'CLE', 'DAL', 'DEN', 'DET',
             'GSW', 'HOU', 'IND', 'LAC', 'LAL', 'MEM', 'MIA', 'MIL', 'MIN',
             'NOP', 'NYK', 'OKC', 'ORL', 'PHI', 'PHX', 'POR', 'SAC', 'SAS',
             'TOR', 'UTA', 'WAS'
         ]
-        
-        self.players = self.players[self.players['TEAM_ABBREVIATION'].isin(nba_teams)]
-        self.pace = self.pace[self.pace['TEAM_ABBREVIATION'].isin(nba_teams)]
-        
-        print(f"✅ Loaded data:")
-        print(f"  {len(self.players)} NBA players")
-        print(f"  {len(self.pace)} NBA teams")
+        players_all = players_all[players_all['TEAM_ABBREVIATION'].isin(nba_teams)]
+        # Ensure we have a TEAM_ABBREVIATION on pace data via mapping from player data
+        team_map = (
+            players_all[['TEAM_ID', 'TEAM_ABBREVIATION', 'SEASON']]
+            .drop_duplicates()
+        )
+
+        # Prefer latest season abbreviation mapping if dup TEAM_IDs
+        team_map = (
+            team_map.sort_values('SEASON', ascending=True)  # ensure 2025-26 sorts after 2024-25 if string? safer to map order
+            .drop_duplicates(subset=['TEAM_ID'], keep='last')
+            [['TEAM_ID', 'TEAM_ABBREVIATION']]
+        )
+
+        # Attach TEAM_ABBREVIATION to pace
+        pace_all = pace_all.merge(team_map, on='TEAM_ID', how='left')
+        pace_all = pace_all[pace_all['TEAM_ABBREVIATION'].isin(nba_teams)]
+
+        # Blend pace and ratings across seasons at team level
+        metrics = ['PACE', 'OFF_RATING', 'DEF_RATING']
+        if blend_mode == 'latest':
+            # Take latest season available for each team
+            pace_all = (
+                pace_all.sort_values('SEASON')  # ensure '2025-26' is after '2024-25'
+                .drop_duplicates(subset=['TEAM_ABBREVIATION'], keep='last')
+            )
+            pace_blended = pace_all[['TEAM_ABBREVIATION'] + metrics].copy()
+        else:
+            # Default: mean across seasons (robust simple blend)
+            pace_blended = (
+                pace_all.groupby('TEAM_ABBREVIATION', as_index=False)[metrics].mean()
+            )
+
+        self.players = players_all
+        self.pace = pace_blended
+
+        print(f"✅ Loaded data (two-season blend: {blend_mode})")
+        print(f"  Players: {len(self.players)} rows across 2024-25 and 2025-26")
+        print(f"  Teams:   {len(self.pace)} teams with blended ratings")
     
     def get_player_features(self, player_name, opponent_team):
         """

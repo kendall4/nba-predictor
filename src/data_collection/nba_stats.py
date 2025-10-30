@@ -6,7 +6,7 @@ import time
 class NBAStatsCollector:
     """Using nba_api - the most reliable free option"""
     
-    def __init__(self, season='2024-25'):  # Last complete season for training
+    def __init__(self, season='2025-26'):  # Last complete season for training
         print(f"🏀 NBA Stats Collector using nba_api")
         print(f"📅 Season: {season}")
         self.season = season
@@ -142,13 +142,13 @@ if __name__ == "__main__":
     print("🏀 NBA STATS COLLECTOR - TRAINING DATA")
     print("=" * 70)
     print("\n📚 Strategy:")
-    print("  1. Collect COMPLETE 2024-25 season data (for training)")
+    print("  1. Collect COMPLETE 2025-26 season data (for training)")
     print("  2. Build & validate ML model")
     print("  3. Apply to 2025-26 games (for predictions)")
     print("\n" + "=" * 70)
     
     # Get LAST COMPLETE season data for training
-    collector = NBAStatsCollector(season='2024-25')
+    collector = NBAStatsCollector(season='2025-26')
     
     try:
         # Test 1: Get all season games
@@ -173,7 +173,7 @@ if __name__ == "__main__":
             has_defense = False
         
         print("\n" + "=" * 70)
-        print("✅ SUCCESS! You have 2024-25 TRAINING DATA:")
+        print("✅ SUCCESS! You have 2025-26 TRAINING DATA:")
         print(f"  📊 Team PACE stats (with DEF_RATING)")
         print(f"  👤 Player stats for all players")
         print(f"  🎮 All {len(games)} games from last season")
