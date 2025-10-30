@@ -12,9 +12,73 @@ st.set_page_config(
     layout="wide"
 )
 
+# Global style overrides: dark background, blue-green accents
+st.markdown(
+    """
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Space+Grotesk:wght@400;600&display=swap');
+
+        html, body, [class^="block-container"] {
+            background-color: #000000 !important;
+            color: #E6F6F3 !important;
+            font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif;
+        }
+
+        h1, h2, h3, h4, h5, h6 {
+            color: #BFFFEF !important;
+            letter-spacing: 0.3px;
+        }
+
+        /* Card-like containers */
+        .st-expander, .stDataFrame, .stMetric, .stAlert, .stMarkdown, .stButton > button {
+            border-radius: 10px !important;
+        }
+
+        /* Buttons: blue-green accent */
+        .stButton > button {
+            background: linear-gradient(135deg, #00e5b0, #00b3a4) !important;
+            color: #001412 !important;
+            border: none !important;
+            box-shadow: 0 4px 16px rgba(0, 229, 176, 0.25);
+        }
+        .stButton > button:hover {
+            filter: brightness(1.05);
+        }
+
+        /* Info/Success/Error containers to fit dark theme */
+        .stAlert[data-baseweb="notification"] {
+            background-color: #0a0f0e !important;
+            border: 1px solid #063a33 !important;
+        }
+
+        /* Dataframe tweaks */
+        .stDataFrame table {
+            color: #E6F6F3 !important;
+        }
+        .stDataFrame thead tr th {
+            background-color: #071614 !important;
+            color: #BFFFEF !important;
+        }
+        .stDataFrame tbody tr:nth-child(odd) {
+            background-color: #050b0a !important;
+        }
+        .stDataFrame tbody tr:nth-child(even) {
+            background-color: #0a1412 !important;
+        }
+
+        /* Sidebar */
+        section[data-testid="stSidebar"] {
+            background-color: #060909 !important;
+            border-right: 1px solid #0f2220 !important;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 # Title
 st.title("🏀 NBA Performance Predictor")
-st.markdown("### AI-Powered Player Performance Analysis")
+st.markdown("<div style='font-family: Space Grotesk; font-size: 1.05rem; opacity: 0.9;'>Kendall's Player Performance Analysis</div>", unsafe_allow_html=True)
 st.markdown("---")
 
 # Sidebar
@@ -176,5 +240,5 @@ if st.button("🔮 Generate Predictions", type="primary", use_container_width=Tr
 
 # Footer
 st.markdown("---")
-st.markdown("**Built with:** NBA API, Machine Learning, Python")
-st.markdown("**Training Data:** 2024-25 Complete Season")
+st.markdown("<div style='opacity:0.8'>Built with: NBA API, Machine Learning, Python</div>", unsafe_allow_html=True)
+st.markdown("<div style='opacity:0.6'>Training Data: 2024-25 and 2025-26</div>", unsafe_allow_html=True)
