@@ -32,6 +32,27 @@ class MatchupFeatureBuilder:
             'TOR', 'UTA', 'WAS'
         ]
         players_all = players_all[players_all['TEAM_ABBREVIATION'].isin(nba_teams)]
+
+        # Deduplicate players across seasons
+        if blend_mode == 'latest':
+            # Keep latest season row per player
+            players_all = (
+                players_all.sort_values('SEASON')
+                .drop_duplicates(subset=['PLAYER_ID'], keep='last')
+            )
+        else:
+            # Average numeric stats across seasons, then attach latest team
+            numeric_cols = ['PTS', 'REB', 'AST', 'FG_PCT', 'GP', 'MIN']
+            per_player_avg = (
+                players_all
+                .groupby(['PLAYER_ID', 'PLAYER_NAME'], as_index=False)[numeric_cols]
+                .mean()
+            )
+            latest_team = (
+                players_all.sort_values('SEASON')
+                .drop_duplicates(subset=['PLAYER_ID'], keep='last')[['PLAYER_ID', 'TEAM_ABBREVIATION']]
+            )
+            players_all = per_player_avg.merge(latest_team, on='PLAYER_ID', how='left')
         # Ensure we have a TEAM_ABBREVIATION on pace data via mapping from player data
         team_map = (
             players_all[['TEAM_ID', 'TEAM_ABBREVIATION', 'SEASON']]
@@ -159,6 +180,16 @@ class MatchupFeatureBuilder:
             # Get all players from both teams
             home_players = self.players[self.players['TEAM_ABBREVIATION'] == home]
             away_players = self.players[self.players['TEAM_ABBREVIATION'] == away]
+
+            # Safety: ensure unique players per team (in case of residual duplicates)
+            if 'PLAYER_ID' in home_players.columns:
+                home_players = home_players.drop_duplicates(subset=['PLAYER_ID'])
+            else:
+                home_players = home_players.drop_duplicates(subset=['PLAYER_NAME'])
+            if 'PLAYER_ID' in away_players.columns:
+                away_players = away_players.drop_duplicates(subset=['PLAYER_ID'])
+            else:
+                away_players = away_players.drop_duplicates(subset=['PLAYER_NAME'])
             
             # Build features for each player
             for _, player in home_players.iterrows():
