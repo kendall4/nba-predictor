@@ -146,7 +146,7 @@ with tab_nba:
     st.markdown("---")
 
     # Generate predictions button
-    if st.button("🔮 Generate Predictions", type="primary", use_container_width=True):
+        if st.button("🔮 Generate Predictions", type="primary", use_container_width=True):
     
     with st.spinner("Analyzing all players... This takes ~30 seconds"):
         analyzer = ValueAnalyzer()
