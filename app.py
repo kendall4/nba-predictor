@@ -83,6 +83,9 @@ st.title("🏀 NBA Performance Predictor")
 st.markdown("<div style='font-family: Space Grotesk; font-size: 1.05rem; opacity: 0.9;'>Kendall's Player Performance Analysis</div>", unsafe_allow_html=True)
 st.markdown("---")
 
+# Tabs: NBA (existing) and NFL (light start)
+tab_nba, tab_nfl = st.tabs(["🏀 NBA", "🏈 NFL (beta)"])
+
 # Sidebar
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -129,20 +132,21 @@ def get_todays_games():
             {'home': 'BOS', 'away': 'MIA', 'status': 'Example'}
         ]
 
-# Show today's games
-st.header("📅 Today's Games")
-with st.spinner("Fetching today's games..."):
-    games = get_todays_games()
+with tab_nba:
+    # Show today's games
+    st.header("📅 Today's Games")
+    with st.spinner("Fetching today's games..."):
+        games = get_todays_games()
 
-cols = st.columns(min(len(games), 4))
-for i, game in enumerate(games):
-    with cols[i % 4]:
-        st.info(f"**{game['away']}** @ **{game['home']}**\n\n{game['status']}")
+    cols = st.columns(min(len(games), 4))
+    for i, game in enumerate(games):
+        with cols[i % 4]:
+            st.info(f"**{game['away']}** @ **{game['home']}**\n\n{game['status']}")
 
-st.markdown("---")
+    st.markdown("---")
 
-# Generate predictions button
-if st.button("🔮 Generate Predictions", type="primary", use_container_width=True):
+    # Generate predictions button
+    if st.button("🔮 Generate Predictions", type="primary", use_container_width=True):
     
     with st.spinner("Analyzing all players... This takes ~30 seconds"):
         analyzer = ValueAnalyzer()
@@ -157,10 +161,10 @@ if st.button("🔮 Generate Predictions", type="primary", use_container_width=Tr
         # Sort by value
         predictions = predictions.sort_values('overall_value', ascending=False)
     
-    st.success(f"✅ Generated predictions for {len(predictions)} players!")
+        st.success(f"✅ Generated predictions for {len(predictions)} players!")
     
     # Top Value Plays
-    st.header("💎 Top Value Plays")
+        st.header("💎 Top Value Plays")
     
     top_n = min(10, len(predictions))
     
@@ -212,9 +216,9 @@ if st.button("🔮 Generate Predictions", type="primary", use_container_width=Tr
                     f"{player['assist_value']:+.1f} vs avg"
                 )
     
-    # Full data table
-    st.markdown("---")
-    st.header("📊 All Predictions")
+        # Full data table
+        st.markdown("---")
+        st.header("📊 All Predictions")
     
     display_df = predictions[[
         'player_name', 'team', 'opponent', 
@@ -228,28 +232,28 @@ if st.button("🔮 Generate Predictions", type="primary", use_container_width=Tr
         'Value Score', 'Pace', 'Opp DEF'
     ]
     
-    st.dataframe(
-        display_df,
-        use_container_width=True,
-        hide_index=True
-    )
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True
+        )
     
     # Download button
     csv = predictions.to_csv(index=False)
-    st.download_button(
-        "📥 Download Full Predictions (CSV)",
-        csv,
-        "nba_predictions.csv",
-        "text/csv",
-        use_container_width=True
-    )
+        st.download_button(
+            "📥 Download Full Predictions (CSV)",
+            csv,
+            "nba_predictions.csv",
+            "text/csv",
+            use_container_width=True
+        )
 
     # =============================
     # Consistency & Alt-Line EV UI
     # =============================
-    if enable_consistency or enable_ev:
-        st.markdown("---")
-        st.header("🧪 Consistency & Alt Lines")
+        if enable_consistency or enable_ev:
+            st.markdown("---")
+            st.header("🧪 Consistency & Alt Lines")
 
         # Player selection
         player_list = predictions['player_name'].unique().tolist()
@@ -338,6 +342,115 @@ if st.button("🔮 Generate Predictions", type="primary", use_container_width=Tr
                 st.dataframe(result['all_lines'], use_container_width=True)
             else:
                 st.info("Prediction not available for points.")
+
+        # Odds CSV upload for EV (NBA)
+        if enable_ev:
+            st.markdown("---")
+            st.subheader("📤 Upload Alt Lines CSV (NBA)")
+            st.caption("Columns: line, over, under. Over/under in American odds, e.g. -110")
+            file = st.file_uploader("Upload CSV of alt lines for selected player (optional)", type=["csv"], key="nba_odds_upload")
+            if file is not None and stat == 'points' and len(sel_row) == 1:
+                try:
+                    odds_df = pd.read_csv(file)
+                    # Validate
+                    if all(c in odds_df.columns for c in ['line','over','under']):
+                        optimizer = AltLineOptimizer()
+                        result = optimizer.optimize_lines(
+                            player_name=selected_player,
+                            stat_type='points',
+                            prediction=float(sel_row.iloc[0]['pred_points']),
+                            alt_lines=odds_df[['line','over','under']].to_dict('records')
+                        )
+                        st.write(f"Best: {result['best_direction']} {result['best_line']} at {int(result['best_odds']):+} | EV {result['best_ev']:+.1%}")
+                        st.dataframe(result['all_lines'], use_container_width=True)
+                    else:
+                        st.error("CSV must contain columns: line, over, under")
+                except Exception as e:
+                    st.error(f"Error reading CSV: {e}")
+
+with tab_nfl:
+    st.header("NFL Player Props (beta)")
+    st.caption("Start light: receptions, receiving yards, passing yards, TDs, passing TDs, pass attempts")
+    st.markdown("---")
+    st.subheader("📤 Upload Player Game Logs (CSV)")
+    st.caption("Columns suggested: GAME_DATE, OPP, receptions, rec_yards, pass_yards, tds, pass_tds, pass_attempts")
+    nfl_file = st.file_uploader("Upload NFL player gamelog CSV", type=["csv"], key="nfl_gamelog")
+    if nfl_file is not None:
+        try:
+            nfl_df = pd.read_csv(nfl_file)
+            # Player selection
+            # If dataset includes PLAYER column, filter; otherwise ask for name and assume file is already filtered
+            player_name = st.text_input("Player Name (optional if file is single-player)", value="")
+            if 'PLAYER' in nfl_df.columns and player_name:
+                nfl_df = nfl_df[nfl_df['PLAYER'].str.lower() == player_name.lower()]
+
+            stat_map = {
+                'receptions': 'receptions',
+                'receiving yards': 'rec_yards',
+                'passing yards': 'pass_yards',
+                'touchdowns (any)': 'tds',
+                'passing touchdowns': 'pass_tds',
+                'pass attempts': 'pass_attempts'
+            }
+            stat_choice = st.selectbox("Stat", options=list(stat_map.keys()))
+            stat_col = stat_map[stat_choice]
+            prop_line = st.number_input("Line", min_value=0.0, max_value=600.0, value=50.0, step=0.5)
+
+            # Consistency
+            st.subheader("📈 Consistency")
+            N_LIST = [5, 6, 7, 8, 10, 15]
+            def calc_rate(df, col, line):
+                valid = df[pd.notna(df[col])]
+                hits = (valid[col] >= line).sum()
+                games = len(valid)
+                return hits, games, (hits / games) if games else 0.0
+
+            colsN = st.columns(3)
+            with colsN[0]:
+                st.markdown("**Last N**")
+                for n in N_LIST:
+                    sample = nfl_df.sort_values('GAME_DATE', ascending=False).head(n)
+                    h, g, r = calc_rate(sample, stat_col, prop_line)
+                    st.write(f"Last {n}: {h}/{g} → {r:.0%}")
+            with colsN[1]:
+                st.markdown("**Full Season**")
+                h, g, r = calc_rate(nfl_df, stat_col, prop_line)
+                st.write(f"Season: {h}/{g} → {r:.0%}")
+            with colsN[2]:
+                st.markdown("**H2H (OPP column)**")
+                opp = st.text_input("Opponent tricode (e.g., NE, KC)", value="")
+                if opp and 'OPP' in nfl_df.columns:
+                    h2h_df = nfl_df[nfl_df['OPP'].str.upper() == opp.upper()]
+                    h, g, r = calc_rate(h2h_df, stat_col, prop_line)
+                    st.write(f"vs {opp.upper()}: {h}/{g} → {r:.0%}")
+
+            # Alt lines EV (uses normal approx like NBA)
+            st.markdown("---")
+            st.subheader("💎 Alt Line EV (CSV upload)")
+            st.caption("Columns: line, over, under (American odds)")
+            nfl_odds = st.file_uploader("Upload alt lines CSV for this prop (optional)", type=["csv"], key="nfl_odds")
+            if nfl_odds is not None:
+                try:
+                    odds_df = pd.read_csv(nfl_odds)
+                    if all(c in odds_df.columns for c in ['line','over','under']):
+                        optimizer = AltLineOptimizer()
+                        # Heuristic prediction: use recent mean as prediction
+                        recent = nfl_df.sort_values('GAME_DATE', ascending=False).head(10)
+                        pred = float(recent[stat_col].mean()) if stat_col in recent.columns else prop_line
+                        result = optimizer.optimize_lines(
+                            player_name=player_name or "NFL Player",
+                            stat_type=stat_choice,
+                            prediction=pred,
+                            alt_lines=odds_df[['line','over','under']].to_dict('records')
+                        )
+                        st.write(f"Best: {result['best_direction']} {result['best_line']} at {int(result['best_odds']):+} | EV {result['best_ev']:+.1%}")
+                        st.dataframe(result['all_lines'], use_container_width=True)
+                    else:
+                        st.error("CSV must contain columns: line, over, under")
+                except Exception as e:
+                    st.error(f"Error reading CSV: {e}")
+        except Exception as e:
+            st.error(f"Error reading NFL gamelog CSV: {e}")
 
 # Footer
 st.markdown("---")
