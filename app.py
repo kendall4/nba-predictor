@@ -145,26 +145,44 @@ with tab_nba:
 
     st.markdown("---")
 
-    # Generate predictions button
-    if st.button("🔮 Generate Predictions", type="primary", use_container_width=True):
+    # Predictions cache in session
+    if 'predictions' not in st.session_state:
+        st.session_state['predictions'] = None
+
+    # Controls for predictions
+    st.subheader("Predictions Workspace")
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        generate = st.button("🔮 Generate/Refresh Predictions", type="primary", use_container_width=True)
+    with c2:
+        st.caption("Generates predictions once and reuses them across tabs for faster UX.")
+
+    if generate or st.session_state['predictions'] is None:
         with st.spinner("Analyzing all players... This takes ~30 seconds"):
             analyzer = ValueAnalyzer()
             predictions = analyzer.analyze_games(games)
-            # Filter by minutes
             predictions = predictions[predictions['minutes'] >= min_minutes]
-            # Filter by value
             predictions = predictions[predictions['overall_value'] >= min_value]
-            # Sort by value
             predictions = predictions.sort_values('overall_value', ascending=False)
+            st.session_state['predictions'] = predictions
+        st.success(f"✅ Generated predictions for {len(st.session_state['predictions'])} players!")
 
-        st.success(f"✅ Generated predictions for {len(predictions)} players!")
+    predictions = st.session_state['predictions']
+    if predictions is None or len(predictions) == 0:
+        st.info("Generate predictions to enable the sub-tabs below.")
+        st.stop()
 
-        # Top Value Plays
+    # Sub-tabs inside NBA
+    tab_leader, tab_predict, tab_hot, tab_sgp, tab_lines = st.tabs([
+        "🏆 Leaderboard", "📈 Predictions", "🔥 Hot Hand", "🎰 Live SGP", "📊 Lines Explorer"
+    ])
+
+    with tab_leader:
         st.header("💎 Top Value Plays")
-
-        top_n = min(10, len(predictions))
-        for i in range(top_n):
-            player = predictions.iloc[i]
+        top_n = st.slider("Show Top N", 5, 50, 10)
+        top = predictions.head(top_n)
+        for i in range(len(top)):
+            player = top.iloc[i]
             with st.expander(f"#{i+1}: {player['player_name']} ({player['team']} vs {player['opponent']}) - Value: {player['overall_value']:.1f}", expanded=i<3):
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -181,16 +199,15 @@ with tab_nba:
                 with col3:
                     st.metric("Value Score", f"{player['overall_value']:.2f}")
                 st.markdown("#### 🎯 Predictions vs Season Average")
-                pred_col1, pred_col2, pred_col3 = st.columns(3)
-                with pred_col1:
+                p1, p2, p3 = st.columns(3)
+                with p1:
                     st.metric("Points", f"{player['pred_points']:.1f}", f"{player['point_value']:+.1f} vs avg")
-                with pred_col2:
+                with p2:
                     st.metric("Rebounds", f"{player['pred_rebounds']:.1f}", f"{player['rebound_value']:+.1f} vs avg")
-                with pred_col3:
+                with p3:
                     st.metric("Assists", f"{player['pred_assists']:.1f}", f"{player['assist_value']:+.1f} vs avg")
 
-        # Full data table
-        st.markdown("---")
+    with tab_predict:
         st.header("📊 All Predictions")
         display_df = predictions[[
             'player_name', 'team', 'opponent', 
@@ -203,127 +220,57 @@ with tab_nba:
             'Value Score', 'Pace', 'Opp DEF'
         ]
         st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-        # Download button
         csv = predictions.to_csv(index=False)
-        st.download_button(
-            "📥 Download Full Predictions (CSV)",
-            csv,
-            "nba_predictions.csv",
-            "text/csv",
-            use_container_width=True
-        )
+        st.download_button("📥 Download Full Predictions (CSV)", csv, "nba_predictions.csv", "text/csv", use_container_width=True)
 
-        # =============================
-        # Consistency & Alt-Line EV UI
-        # =============================
-        if enable_consistency or enable_ev:
-            st.markdown("---")
-            st.header("🧪 Consistency & Alt Lines")
-
-        # Player selection
+    with tab_hot:
+        st.header("🔥 Hot Hand Tracker")
         player_list = predictions['player_name'].unique().tolist()
-        default_player = player_list[0] if player_list else ""
-        selected_player = st.selectbox("Select Player", options=player_list, index=0 if default_player else None)
-
-        # Stat selection
-        stat = st.selectbox("Stat", options=["points", "rebounds", "assists", "threes"], index=0)
-
-        # Suggested line: use season avg from predictions row
-        sel_row = predictions[predictions['player_name'] == selected_player].head(1)
-        suggested_line = 0.0
-        if len(sel_row) == 1:
-            if stat == 'points':
-                suggested_line = float(sel_row.iloc[0]['line_points'])
-            elif stat == 'rebounds':
-                suggested_line = float(sel_row.iloc[0]['line_rebounds'])
-            elif stat == 'assists':
-                suggested_line = float(sel_row.iloc[0]['line_assists'])
-            else:
-                suggested_line = 2.5
-
-        line_value = st.number_input("Line (can override)", min_value=0.0, max_value=100.0, value=float(suggested_line), step=0.5)
-
-        # Run Consistency
-        if enable_consistency:
-            st.subheader("📈 Consistency (2025-26)")
+        selected_player = st.selectbox("Select Player", options=player_list)
+        q1 = st.number_input("Q1 Points", min_value=0.0, max_value=40.0, value=10.0, step=1.0)
+        threshold = st.select_slider("Hot threshold", options=[5, 10], value=5)
+        if st.button("Estimate Hot-Hand Outcome", use_container_width=True):
             tracker = HotHandTracker(blend_mode="latest")
-            N_LIST = [5, 6, 7, 8, 10, 15]
-            opp_map = {}
-            for g in games:
-                opp_map[g['home']] = g['away']
-                opp_map[g['away']] = g['home']
-            opp_text = None
-            if len(sel_row) == 1:
-                team = sel_row.iloc[0]['team']
-                opp_text = opp_map.get(team)
-            cols_cons = st.columns(3)
-            with cols_cons[0]:
-                st.markdown("**Last N Games**")
-                for n in N_LIST:
-                    rate = tracker.consistency_last_n(selected_player, stat, line_value, n=n, season='2025-26')
-                    st.write(f"Last {n}: {rate['hits']}/{rate['games']} → {rate['hit_rate']:.0%}")
-            with cols_cons[1]:
-                st.markdown("**Head-to-Head (Today)**")
-                if isinstance(opp_text, str):
-                    h2h = tracker.consistency_h2h(selected_player, stat, line_value, opponent_tricode=opp_text, season='2025-26')
-                    st.write(f"vs {opp_text}: {h2h['hits']}/{h2h['games']} → {h2h['hit_rate']:.0%}")
-                else:
-                    st.write("No opponent mapped for today")
-            with cols_cons[2]:
-                st.markdown("**Full Season**")
-                seas = tracker.consistency_season(selected_player, stat, line_value, season='2025-26')
-                st.write(f"2025-26: {seas['hits']}/{seas['games']} → {seas['hit_rate']:.0%}")
+            result = tracker.predict_from_hot_q1(selected_player, q1, threshold=int(threshold))
+            st.write(result)
 
-        # Alt-line EV (points only, using model prediction)
-        if enable_ev and stat == 'points' and len(sel_row) == 1:
-            st.subheader("💎 Alt Line EV (sample ladder)")
-            pred_points = float(sel_row.iloc[0]['pred_points']) if 'pred_points' in sel_row.columns else None
-            if pred_points is not None:
-                base = float(line_value)
-                ladder = [
-                    {"line": max(0.5, base - 4.0), "over": -160, "under": 130},
-                    {"line": base - 2.0, "over": -120, "under": 100},
-                    {"line": base, "over": -110, "under": -110},
-                    {"line": base + 2.0, "over": 120, "under": -150},
-                    {"line": base + 4.0, "over": 220, "under": -280},
-                ]
-                optimizer = AltLineOptimizer()
-                result = optimizer.optimize_lines(
-                    player_name=selected_player,
-                    stat_type='points',
-                    prediction=pred_points,
-                    alt_lines=ladder
-                )
-                best_line = result['best_line']; best_dir = result['best_direction']; best_odds = result['best_odds']; best_ev = result['best_ev']
-                st.write(f"Best: {best_dir} {best_line} at {best_odds:+} | EV {best_ev:+.1%}")
-                st.dataframe(result['all_lines'], use_container_width=True)
-            else:
-                st.info("Prediction not available for points.")
+    with tab_sgp:
+        st.header("🎰 Live SGP Analyzer")
+        st.caption("Enter legs (demo) — integrate live data feed later.")
+        legs_df = st.experimental_data_editor(pd.DataFrame([
+            {"player":"Player A","stat":"points","line":20,"current":14},
+            {"player":"Player B","stat":"rebounds","line":8,"current":6}
+        ]), num_rows="dynamic", use_container_width=True)
+        time_left = st.number_input("Time left (seconds)", min_value=0, max_value=3600, value=240, step=10)
+        odds = st.number_input("Parlay odds (American)", value=10000, step=100)
+        if st.button("Analyze Parlay", use_container_width=True):
+            from src.analysis.live_sgp_analyzer import LiveSGPAnalyzer
+            sgp = LiveSGPAnalyzer()
+            analysis = sgp.analyze_parlay(legs=legs_df.to_dict('records'), time_left_seconds=int(time_left), odds=int(odds))
+            sgp.display_analysis(analysis)
 
-        # Odds CSV upload for EV (NBA)
-        if enable_ev:
-            st.markdown("---")
-            st.subheader("📤 Upload Alt Lines CSV (NBA)")
-            st.caption("Columns: line, over, under. Over/under in American odds, e.g. -110")
-            file = st.file_uploader("Upload CSV of alt lines for selected player (optional)", type=["csv"], key="nba_odds_upload")
-            if file is not None and stat == 'points' and len(sel_row) == 1:
-                try:
-                    odds_df = pd.read_csv(file)
-                    if all(c in odds_df.columns for c in ['line','over','under']):
-                        optimizer = AltLineOptimizer()
-                        result = optimizer.optimize_lines(
-                            player_name=selected_player,
-                            stat_type='points',
-                            prediction=float(sel_row.iloc[0]['pred_points']),
-                            alt_lines=odds_df[['line','over','under']].to_dict('records')
-                        )
-                        st.write(f"Best: {result['best_direction']} {result['best_line']} at {int(result['best_odds']):+} | EV {result['best_ev']:+.1%}")
-                        st.dataframe(result['all_lines'], use_container_width=True)
-                    else:
-                        st.error("CSV must contain columns: line, over, under")
-                except Exception as e:
-                    st.error(f"Error reading CSV: {e}")
+    with tab_lines:
+        st.header("📊 Lines Explorer")
+        st.caption("Browse by stat across all players; filter and sort by value")
+        # Build long-format table from predictions
+        rows = []
+        for _, r in predictions.iterrows():
+            rows.append({"Player": r['player_name'], "Team": r['team'], "Opponent": r['opponent'], "Stat": "points", "Line": r['line_points'], "Pred": r['pred_points'], "Value": r['point_value']})
+            rows.append({"Player": r['player_name'], "Team": r['team'], "Opponent": r['opponent'], "Stat": "rebounds", "Line": r['line_rebounds'], "Pred": r['pred_rebounds'], "Value": r['rebound_value']})
+            rows.append({"Player": r['player_name'], "Team": r['team'], "Opponent": r['opponent'], "Stat": "assists", "Line": r['line_assists'], "Pred": r['pred_assists'], "Value": r['assist_value']})
+        lines_df = pd.DataFrame(rows)
+        stat_filter = st.multiselect("Filter stats", options=["points","rebounds","assists"], default=["points","rebounds","assists"])
+        team_filter = st.multiselect("Filter teams", options=sorted(predictions['team'].unique().tolist()))
+        opp_filter = st.multiselect("Filter opponents", options=sorted(predictions['opponent'].unique().tolist()))
+        min_value_filter = st.slider("Minimum value", -10.0, 10.0, 0.0, 0.5)
+        df = lines_df[lines_df['Stat'].isin(stat_filter)].copy()
+        if team_filter:
+            df = df[df['Team'].isin(team_filter)]
+        if opp_filter:
+            df = df[df['Opponent'].inisin(opp_filter)]
+        df = df[df['Value'] >= min_value_filter]
+        df = df.sort_values('Value', ascending=False)
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
 with tab_nfl:
     st.header("NFL Player Props (beta)")
