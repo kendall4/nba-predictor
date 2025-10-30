@@ -237,7 +237,7 @@ with tab_nba:
     with tab_sgp:
         st.header("🎰 Live SGP Analyzer")
         st.caption("Enter legs (demo) — integrate live data feed later.")
-        legs_df = st.experimental_data_editor(pd.DataFrame([
+        legs_df = st.data_editor(pd.DataFrame([
             {"player":"Player A","stat":"points","line":20,"current":14},
             {"player":"Player B","stat":"rebounds","line":8,"current":6}
         ]), num_rows="dynamic", use_container_width=True)
