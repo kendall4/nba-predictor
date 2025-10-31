@@ -1,7 +1,8 @@
 """
 Injury Tracker Service
 =====================
-Fetches player injury/health status from NBA API and other sources.
+Fetches player injury/health status from Rotowire API.
+Falls back to NBA API if Rotowire unavailable.
 """
 
 import requests
@@ -9,6 +10,7 @@ import pandas as pd
 from typing import Dict, Optional, List
 from nba_api.stats.endpoints import commonplayerinfo
 from nba_api.stats.static import players as static_players
+import os
 import time
 
 class InjuryTracker:
@@ -21,11 +23,16 @@ class InjuryTracker:
     3. ESPN (via scraping fallback - not implemented yet)
     """
     
-    def __init__(self):
+    def __init__(self, api_key: Optional[str] = None):
+        self.rotowire_api_key = api_key or os.getenv('ROTOWIRE_API_KEY')
+        self.base_url = "https://api.rotowire.com/v1"
         self.cache = {}
+        self.injuries_df = None  # Cache full injuries list
         self.cache_dir = 'data/cache'
-        import os
         os.makedirs(self.cache_dir, exist_ok=True)
+        
+        if not self.rotowire_api_key:
+            print("⚠️  ROTOWIRE_API_KEY not found. Using NBA API fallback.")
     
     def _lookup_player_id(self, player_name: str) -> Optional[int]:
         """Find NBA API player ID"""
@@ -36,9 +43,43 @@ class InjuryTracker:
                        if player_name.lower() in p['full_name'].lower()]
         return matches[0]['id'] if matches else None
     
+    def _get_rotowire_injuries(self) -> Optional[pd.DataFrame]:
+        """Fetch all NBA injuries from Rotowire API"""
+        if not self.rotowire_api_key:
+            return None
+        
+        try:
+            url = f"{self.base_url}/nba/injuries"
+            headers = {
+                'Authorization': f'Bearer {self.rotowire_api_key}',
+                'Content-Type': 'application/json'
+            }
+            # Alternative auth format (if Bearer doesn't work, try API key in params)
+            params = {'apikey': self.rotowire_api_key} if 'Bearer' not in headers.get('Authorization', '') else {}
+            
+            response = requests.get(url, headers=headers if not params else None, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                # Rotowire returns list of injury objects
+                if isinstance(data, list):
+                    return pd.DataFrame(data)
+                elif isinstance(data, dict) and 'injuries' in data:
+                    return pd.DataFrame(data['injuries'])
+                return pd.DataFrame(data)
+            elif response.status_code == 401:
+                print("❌ Invalid Rotowire API key")
+                return None
+            else:
+                print(f"⚠️  Rotowire API error: {response.status_code}")
+                return None
+        except Exception as e:
+            print(f"⚠️  Error fetching Rotowire injuries: {e}")
+            return None
+    
     def get_player_status(self, player_name: str) -> Dict:
         """
-        Get player injury/health status
+        Get player injury/health status from Rotowire API
         
         Returns:
             {
@@ -48,54 +89,71 @@ class InjuryTracker:
                 'last_updated': timestamp
             }
         """
-        player_id = self._lookup_player_id(player_name)
-        if player_id is None:
-            return {
-                'player': player_name,
-                'status': 'Unknown',
-                'injury': None,
-                'last_updated': None
-            }
-        
         # Check cache first
-        cache_key = f"injury_{player_id}"
+        cache_key = f"injury_{player_name.lower()}"
         if cache_key in self.cache:
             return self.cache[cache_key]
         
-        try:
-            # NBA API player info (has basic status)
-            # Reduced delay - we cache results so don't need full delay
-            time.sleep(0.2)  # Reduced rate limit (was 0.6)
-            # Note: NBA API doesn't directly expose injury status in common player info
-            # For now, we default to 'Healthy' - can extend with game log analysis later
-            # Future: Use commonplayerinfo or other endpoints to detect injuries
-            
-            status = 'Healthy'  # Default - NBA API doesn't have direct injury field
-            injury = None
-            
-            # Try to get from player game log (if missing recent games, might be injured)
-            # This is a heuristic - not perfect
-            
+        # Try Rotowire first (cache the full list to avoid repeated API calls)
+        if self.rotowire_api_key:
+            if self.injuries_df is None:
+                self.injuries_df = self._get_rotowire_injuries()
+            injuries_df = self.injuries_df
+            if injuries_df is not None and len(injuries_df) > 0:
+                # Match player by name (fuzzy match)
+                player_match = injuries_df[
+                    injuries_df['player_name'].str.contains(player_name, case=False, na=False) |
+                    injuries_df['player_name'].str.contains(player_name.split()[-1], case=False, na=False)
+                ]
+                
+                if len(player_match) > 0:
+                    injury_row = player_match.iloc[0]
+                    # Rotowire status mapping (common fields: status, injury_type, injury_description)
+                    rotowire_status = str(injury_row.get('status', 'Unknown')).lower()
+                    
+                    # Map Rotowire status to our format
+                    if 'out' in rotowire_status or 'dtd' in rotowire_status:
+                        status = 'Out'
+                    elif 'questionable' in rotowire_status or 'q' in rotowire_status:
+                        status = 'Questionable'
+                    elif 'probable' in rotowire_status or 'healthy' in rotowire_status:
+                        status = 'Healthy'
+                    else:
+                        status = 'Questionable'  # Default to questionable if uncertain
+                    
+                    result = {
+                        'player': player_name,
+                        'status': status,
+                        'injury': str(injury_row.get('injury', injury_row.get('injury_description', 'Unknown'))),
+                        'last_updated': pd.Timestamp.now().isoformat(),
+                        'source': 'rotowire'
+                    }
+                    self.cache[cache_key] = result
+                    return result
+        
+        # Fallback to NBA API lookup (if no Rotowire match found)
+        player_id = self._lookup_player_id(player_name)
+        if player_id is None:
             result = {
-                'player': player_name,
-                'status': status,
-                'injury': injury,
-                'last_updated': pd.Timestamp.now().isoformat(),
-                'source': 'nba_api'
-            }
-            
-            self.cache[cache_key] = result
-            return result
-            
-        except Exception as e:
-            print(f"⚠️  Error fetching status for {player_name}: {e}")
-            return {
                 'player': player_name,
                 'status': 'Unknown',
                 'injury': None,
                 'last_updated': None,
-                'error': str(e)
+                'source': 'nba_api_fallback'
             }
+            self.cache[cache_key] = result
+            return result
+        
+        # NBA API fallback - defaults to Healthy
+        result = {
+            'player': player_name,
+            'status': 'Healthy',  # Default assumption
+            'injury': None,
+            'last_updated': pd.Timestamp.now().isoformat(),
+            'source': 'nba_api_fallback'
+        }
+        self.cache[cache_key] = result
+        return result
     
     def get_multiple_statuses(self, player_names: List[str]) -> pd.DataFrame:
         """Get status for multiple players"""

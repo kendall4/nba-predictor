@@ -180,7 +180,8 @@ with tab_nba:
             # Optimization: Only check top 50 players (where most value plays are)
             if filter_injured:
                 from src.services.injury_tracker import InjuryTracker
-                injury_tracker = InjuryTracker()
+                import os
+                injury_tracker = InjuryTracker(api_key=os.getenv('ROTOWIRE_API_KEY'))
                 
                 # Sort first, then only check top players (faster)
                 predictions_sorted = predictions.sort_values('overall_value', ascending=False)
