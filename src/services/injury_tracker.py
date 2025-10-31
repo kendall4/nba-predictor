@@ -64,13 +64,11 @@ class InjuryTracker:
         
         try:
             # NBA API player info (has basic status)
-            time.sleep(0.6)  # Rate limit
-            info = commonplayerinfo.CommonPlayerInfo(player_id=player_id)
-            df = info.get_data_frames()[0]
-            
-            # NBA API doesn't directly expose injury status in common player info
-            # We'll infer from games played or use other indicators
-            # For now, return basic structure
+            # Reduced delay - we cache results so don't need full delay
+            time.sleep(0.2)  # Reduced rate limit (was 0.6)
+            # Note: NBA API doesn't directly expose injury status in common player info
+            # For now, we default to 'Healthy' - can extend with game log analysis later
+            # Future: Use commonplayerinfo or other endpoints to detect injuries
             
             status = 'Healthy'  # Default - NBA API doesn't have direct injury field
             injury = None

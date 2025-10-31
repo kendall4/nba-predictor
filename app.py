@@ -170,52 +170,64 @@ with tab_nba:
         st.caption("Generates predictions once and reuses them across tabs for faster UX.")
 
     if generate or st.session_state['predictions'] is None:
-        with st.spinner("Analyzing all players... This takes ~30 seconds"):
+        with st.spinner("Analyzing all players... This may take a moment"):
             analyzer = ValueAnalyzer()
             predictions = analyzer.analyze_games(games)
             predictions = predictions[predictions['minutes'] >= min_minutes]
             predictions = predictions[predictions['overall_value'] >= min_value]
             
             # Filter out injured/out players if enabled
+            # Optimization: Only check top 50 players (where most value plays are)
             if filter_injured:
                 from src.services.injury_tracker import InjuryTracker
                 injury_tracker = InjuryTracker()
+                
+                # Sort first, then only check top players (faster)
+                predictions_sorted = predictions.sort_values('overall_value', ascending=False)
+                top_n_to_check = min(50, len(predictions_sorted))  # Only check top 50
+                top_players = predictions_sorted.head(top_n_to_check)
+                rest_players = predictions_sorted.iloc[top_n_to_check:]
+                
                 healthy_players = []
                 injured_count = 0
                 questionable_count = 0
                 
-                st.write("Checking injury status... (this may take a moment)")
-                progress_bar = st.progress(0)
-                total_players = len(predictions)
-                
-                for idx, (_, row) in enumerate(predictions.iterrows()):
-                    player_name = row['player_name']
-                    try:
-                        status = injury_tracker.get_player_status(player_name)
-                        
-                        # Filter out "Out" status
-                        if status['status'] == 'Out':
-                            injured_count += 1
-                            continue
-                        
-                        # Optionally filter "Questionable" based on toggle
-                        if status['status'] == 'Questionable' and not include_questionable:
-                            questionable_count += 1
-                            continue
-                        
-                        if status['status'] == 'Questionable':
-                            questionable_count += 1
-                        
-                        healthy_players.append(row)
-                    except Exception:
-                        # If injury check fails, include player (fail-safe)
-                        healthy_players.append(row)
+                if top_n_to_check > 0:
+                    st.write(f"Checking injury status for top {top_n_to_check} players...")
+                    progress_bar = st.progress(0)
                     
-                    # Update progress
-                    if (idx + 1) % 5 == 0:
-                        progress_bar.progress(min((idx + 1) / total_players, 1.0))
+                    for idx, (_, row) in enumerate(top_players.iterrows()):
+                        player_name = row['player_name']
+                        try:
+                            status = injury_tracker.get_player_status(player_name)
+                            
+                            # Filter out "Out" status
+                            if status['status'] == 'Out':
+                                injured_count += 1
+                                continue
+                            
+                            # Optionally filter "Questionable" based on toggle
+                            if status['status'] == 'Questionable' and not include_questionable:
+                                questionable_count += 1
+                                continue
+                            
+                            if status['status'] == 'Questionable':
+                                questionable_count += 1
+                            
+                            healthy_players.append(row)
+                        except Exception:
+                            # If injury check fails, include player (fail-safe)
+                            healthy_players.append(row)
+                        
+                        # Update progress every player
+                        progress_bar.progress((idx + 1) / top_n_to_check)
+                    
+                    progress_bar.empty()
                 
-                progress_bar.empty()
+                # Include rest of players without injury check (assume healthy)
+                # This speeds things up significantly
+                for _, row in rest_players.iterrows():
+                    healthy_players.append(row)
                 
                 status_msg = []
                 if injured_count > 0:
