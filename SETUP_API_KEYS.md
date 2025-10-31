@@ -1,13 +1,21 @@
 # API Keys Setup
 
-## Rotowire API (Injuries & Lineups) - RECOMMENDED
+## ✅ NO API KEYS REQUIRED! 
 
-1. **Get API Key:**
-   - Contact Rotowire directly for API access
+The app works completely **FREE** using ESPN's public injury reports. API keys are **OPTIONAL** for enhanced features.
+
+---
+
+## Rotowire API (Injuries & Lineups) - OPTIONAL
+
+**Note:** Rotowire requires a **paid subscription** and contacting them directly. You don't need this - ESPN provides free injury data!
+
+1. **Get API Key (if desired):**
+   - Contact Rotowire directly for API access (requires paid subscription)
    - Visit: https://www.rotowire.com/ (look for API/Developer access)
    - API provides real-time injury reports and expected lineups
 
-2. **Set Environment Variable:**
+2. **Set Environment Variable (optional):**
    
    **Local (`.env` file):**
    ```bash
@@ -24,7 +32,7 @@
 3. **Usage:**
    - Injury status automatically used when filtering predictions
    - Lineups shown in "🗓️ Games" tab
-   - Falls back to NBA API if Rotowire unavailable
+   - **Without Rotowire:** Falls back to FREE ESPN injury data (works great!)
 
 ## The Odds API (Line Shopping)
 
@@ -52,15 +60,23 @@
    - Select player and stat
    - Click "Fetch Live Odds" to compare across books
 
+## ESPN Injury Reports (FREE - DEFAULT)
+
+- **No API key needed!** Works automatically
+- Scrapes public ESPN NBA injury reports
+- Used automatically if Rotowire API key not provided
+- Updates daily with current injury status
+
 ## NBA API (Fallback)
 
 - Already configured (public API, no key needed)
-- Used as fallback if Rotowire unavailable
+- Used as final fallback if ESPN unavailable
 - Injury status shown automatically in Player Explorer
 
 ## Notes
 
-- **Rotowire**: Best source for injuries/lineups, requires contact for API access
+- **🎉 FREE TO USE:** ESPN injury data works without any API keys!
+- **Rotowire**: Premium option (paid subscription) - only needed if you want their specific data format
 - **The Odds API**: Free tier: 500 requests/month
-- Both APIs are optional - app works without them (with reduced features)
+- **All APIs are optional** - app works great with just ESPN (free)!
 
