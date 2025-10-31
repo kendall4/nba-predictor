@@ -109,6 +109,10 @@ with st.sidebar:
     st.subheader("🧪 Consistency & Odds")
     enable_consistency = st.toggle("Enable Consistency Checker", value=True)
     enable_ev = st.toggle("Enable Alt-Line EV (points)", value=True)
+    st.markdown("---")
+    st.subheader("🏥 Injury Filtering")
+    filter_injured = st.toggle("Filter injured/out players", value=True, help="Excludes players marked 'Out' from predictions")
+    include_questionable = st.toggle("Include questionable players", value=True, help="Shows players with 'Questionable' status (with warning)")
 
 # Get today's games
 @st.cache_data(ttl=300)  # Cache for 5 minutes
@@ -171,6 +175,57 @@ with tab_nba:
             predictions = analyzer.analyze_games(games)
             predictions = predictions[predictions['minutes'] >= min_minutes]
             predictions = predictions[predictions['overall_value'] >= min_value]
+            
+            # Filter out injured/out players if enabled
+            if filter_injured:
+                from src.services.injury_tracker import InjuryTracker
+                injury_tracker = InjuryTracker()
+                healthy_players = []
+                injured_count = 0
+                questionable_count = 0
+                
+                st.write("Checking injury status... (this may take a moment)")
+                progress_bar = st.progress(0)
+                total_players = len(predictions)
+                
+                for idx, (_, row) in enumerate(predictions.iterrows()):
+                    player_name = row['player_name']
+                    try:
+                        status = injury_tracker.get_player_status(player_name)
+                        
+                        # Filter out "Out" status
+                        if status['status'] == 'Out':
+                            injured_count += 1
+                            continue
+                        
+                        # Optionally filter "Questionable" based on toggle
+                        if status['status'] == 'Questionable' and not include_questionable:
+                            questionable_count += 1
+                            continue
+                        
+                        if status['status'] == 'Questionable':
+                            questionable_count += 1
+                        
+                        healthy_players.append(row)
+                    except Exception:
+                        # If injury check fails, include player (fail-safe)
+                        healthy_players.append(row)
+                    
+                    # Update progress
+                    if (idx + 1) % 5 == 0:
+                        progress_bar.progress(min((idx + 1) / total_players, 1.0))
+                
+                progress_bar.empty()
+                
+                status_msg = []
+                if injured_count > 0:
+                    status_msg.append(f"❌ {injured_count} out")
+                if questionable_count > 0 and include_questionable:
+                    status_msg.append(f"⚠️ {questionable_count} questionable")
+                if status_msg:
+                    st.info("Injury filter: " + " | ".join(status_msg))
+                
+                predictions = pd.DataFrame(healthy_players)
             predictions = predictions.sort_values('overall_value', ascending=False)
             st.session_state['predictions'] = predictions
         st.success(f"✅ Generated predictions for {len(st.session_state['predictions'])} players!")
