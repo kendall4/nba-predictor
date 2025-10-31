@@ -56,6 +56,22 @@ def render(predictions):
         with st.spinner("Fetching odds from sportsbooks..."):
             alt_lines_df = aggregator.get_alt_lines(selected_player, stat=stat)
             
+            # Handle error responses (debug info)
+            if isinstance(alt_lines_df, dict) and 'error' in alt_lines_df:
+                if alt_lines_df['error'] == 'player_not_found':
+                    st.error(f"❌ Player '{selected_player}' not found in sportsbook data")
+                    st.info("**Available players (sample):**")
+                    if alt_lines_df.get('available_players'):
+                        st.write(", ".join(alt_lines_df['available_players']))
+                    st.caption(f"Total players available: {alt_lines_df.get('total_players', 0)}")
+                    st.info("💡 Try searching with a different name format or check if the player has any props listed")
+                elif alt_lines_df['error'] == 'stat_not_found':
+                    st.warning(f"⚠️ No '{stat}' props found for '{selected_player}'")
+                    st.info(f"**Available stats for this player:** {', '.join(alt_lines_df.get('available_stats', []))}")
+                    if alt_lines_df.get('matched_players'):
+                        st.caption(f"Matched as: {alt_lines_df['matched_players'][0]}")
+                return
+            
             if alt_lines_df is None or len(alt_lines_df) == 0:
                 st.warning("No odds found for this player/stat combination.")
                 st.info("💡 Odds may not be available yet, or player name doesn't match sportsbook format")

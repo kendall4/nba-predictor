@@ -96,12 +96,52 @@ class OddsAggregator:
                         
                         for outcome in market.get('outcomes', []):
                             player_name = outcome.get('name', '')
-                            stat_type = outcome.get('description', '')  # e.g., "Points", "Rebounds"
+                            description = outcome.get('description', '').lower()
+                            
+                            # Extract stat type from description (e.g., "Points", "Rebounds", "Assists")
+                            # Format: "Player Name Points Over/Under X.X"
+                            stat_type = ''
+                            stat_keywords = {
+                                'points': 'points',
+                                'point': 'points',
+                                'pts': 'points',
+                                'rebounds': 'rebounds',
+                                'rebound': 'rebounds',
+                                'reb': 'rebounds',
+                                'board': 'rebounds',
+                                'assists': 'assists',
+                                'assist': 'assists',
+                                'ast': 'assists',
+                                'three': 'threes',
+                                '3pt': 'threes',
+                                '3-pointer': 'threes',
+                                'steals': 'steals',
+                                'steal': 'steals',
+                                'blocks': 'blocks',
+                                'block': 'blocks'
+                            }
+                            
+                            for keyword, stat in stat_keywords.items():
+                                if keyword in description:
+                                    stat_type = stat
+                                    break
+                            
+                            if not stat_type:
+                                # Try to extract from description more broadly
+                                desc_words = description.split()
+                                for word in desc_words:
+                                    if word in stat_keywords:
+                                        stat_type = stat_keywords[word]
+                                        break
+                            
+                            if not stat_type:
+                                stat_type = description  # Fallback
+                            
                             point = outcome.get('point', 0)
                             price = outcome.get('price', 0)
                             
                             # Determine over/under from outcome type
-                            is_over = 'over' in outcome.get('description', '').lower() or 'over' in stat_type.lower()
+                            is_over = 'over' in description
                             
                             props.append({
                                 'game_id': game_id,
@@ -185,6 +225,54 @@ class OddsAggregator:
             'all_books': filtered.to_dict('records')
         }
     
+    def _normalize_player_name(self, name: str) -> str:
+        """Normalize player name for matching (remove accents, special chars)"""
+        import unicodedata
+        # Remove accents
+        name = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('ascii')
+        # Remove common prefixes/suffixes
+        name = name.replace('Jr.', '').replace('Jr', '').replace('Sr.', '').replace('Sr', '')
+        # Remove extra spaces
+        name = ' '.join(name.split())
+        return name.lower()
+    
+    def _fuzzy_match_player(self, search_name: str, available_names: pd.Series) -> pd.Series:
+        """
+        Fuzzy match player name using multiple strategies:
+        1. Exact match (case-insensitive)
+        2. Contains match
+        3. Last name match
+        4. Normalized match (no accents)
+        """
+        search_normalized = self._normalize_player_name(search_name)
+        search_parts = search_name.split()
+        last_name = search_parts[-1] if len(search_parts) > 0 else search_name
+        
+        # Try exact match first
+        exact_match = available_names[available_names.str.lower() == search_name.lower()]
+        if len(exact_match) > 0:
+            return exact_match.index
+        
+        # Try contains match
+        contains_match = available_names[available_names.str.contains(search_name, case=False, na=False)]
+        if len(contains_match) > 0:
+            return contains_match.index
+        
+        # Try normalized match
+        normalized_names = available_names.apply(self._normalize_player_name)
+        normalized_match = normalized_names[normalized_names == search_normalized]
+        if len(normalized_match) > 0:
+            return normalized_match.index
+        
+        # Try last name match
+        last_name_match = available_names[
+            available_names.str.contains(last_name, case=False, na=False)
+        ]
+        if len(last_name_match) > 0:
+            return last_name_match.index
+        
+        return pd.Index([])
+    
     def get_alt_lines(self, player_name: str, stat: str = 'points'):
         """
         Get all alt lines for a player/stat across books
@@ -195,16 +283,58 @@ class OddsAggregator:
         if props_df is None or len(props_df) == 0:
             return None
         
-        filtered = props_df[
-            (props_df['player'].str.contains(player_name, case=False, na=False)) &
-            (props_df['stat'].str.contains(stat, case=False, na=False))
-        ]
+        # Normalize stat name
+        stat_lower = stat.lower()
+        stat_variants = {
+            'points': ['point', 'pts', 'scoring'],
+            'rebounds': ['rebound', 'reb', 'board'],
+            'assists': ['assist', 'ast'],
+            'threes': ['three', '3pt', '3-pointer', '3 pointer'],
+            'steals': ['steal', 'stl'],
+            'blocks': ['block', 'blk']
+        }
         
-        if len(filtered) == 0:
-            return None
+        # Get all available stats for debugging
+        available_stats = props_df['stat'].unique().tolist() if len(props_df) > 0 else []
+        available_players = props_df['player'].unique().tolist() if len(props_df) > 0 else []
+        
+        # Try fuzzy player matching
+        player_indices = self._fuzzy_match_player(player_name, props_df['player'])
+        
+        if len(player_indices) == 0:
+            # Return debug info
+            return {
+                'error': 'player_not_found',
+                'search_name': player_name,
+                'available_players': available_players[:20],  # First 20 for reference
+                'total_players': len(available_players)
+            }
+        
+        # Filter by matched players
+        player_filtered = props_df.loc[player_indices]
+        
+        # Filter by stat (try variants)
+        stat_match = False
+        for variant in [stat_lower] + stat_variants.get(stat_lower, []):
+            stat_filtered = player_filtered[
+                player_filtered['stat'].str.contains(variant, case=False, na=False)
+            ]
+            if len(stat_filtered) > 0:
+                stat_match = True
+                break
+        
+        if not stat_match:
+            # Return debug info
+            return {
+                'error': 'stat_not_found',
+                'search_stat': stat,
+                'available_stats': list(set(player_filtered['stat'].unique().tolist())),
+                'matched_players': player_filtered['player'].unique().tolist()[:5]
+            }
         
         # Group by line and show all books
-        return filtered.sort_values(['line', 'over_odds'], ascending=[True, False])
+        result = stat_filtered.sort_values(['line', 'over_odds'], ascending=[True, False])
+        return result
 
 
 if __name__ == "__main__":
