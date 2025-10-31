@@ -13,6 +13,7 @@ from src.ui.nba import live_sgp as ui_sgp
 from src.ui.nba import lines_explorer as ui_lines
 from src.ui.nba import player_explorer as ui_player
 from src.ui.nba import games as ui_games
+from src.ui.nba import line_shopping as ui_shopping
 
 # Page config
 st.set_page_config(
@@ -180,8 +181,8 @@ with tab_nba:
         st.stop()
 
     # Sub-tabs inside NBA
-    tab_leader, tab_predict, tab_hot, tab_sgp, tab_lines, tab_player, tab_games = st.tabs([
-        "🏆 Leaderboard", "📈 Predictions", "🔥 Hot Hand", "🎰 Live SGP", "📊 Lines Explorer", "🧑‍💻 Player Explorer", "🗓️ Games"
+    tab_leader, tab_predict, tab_hot, tab_sgp, tab_lines, tab_player, tab_games, tab_shopping = st.tabs([
+        "🏆 Leaderboard", "📈 Predictions", "🔥 Hot Hand", "🎰 Live SGP", "📊 Lines Explorer", "🧑‍💻 Player Explorer", "🗓️ Games", "💰 Line Shopping"
     ])
 
     with tab_leader:
@@ -204,6 +205,9 @@ with tab_nba:
 
     with tab_games:
         ui_games.render(predictions, games)
+    
+    with tab_shopping:
+        ui_shopping.render(predictions)
 
 with tab_nfl:
     st.header("NFL Player Props (beta)")

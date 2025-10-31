@@ -2,6 +2,16 @@
 
 ## Recent Updates
 
+### API Integrations (Odds & Injuries)
+- ✅ Odds Aggregator: Fetches alt lines from multiple sportsbooks via The Odds API
+  - Supports: DraftKings, FanDuel, Fanatics, ESPN Bet, BetMGM, Caesars
+  - Line shopping tab: Compare odds across books, find best EV
+- ✅ Injury Tracker: Fetches player injury status from NBA API
+  - Status indicators in Player Explorer (Healthy/Questionable/Out)
+  - Can be extended with Rotowire/ESPN scraping
+
+### Previous Updates
+
 ### ML/AI Integration
 - ✅ Added ML model training pipeline (`src/models/`)
   - Training data builder: Creates dataset from historical games

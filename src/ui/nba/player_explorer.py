@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from src.analysis.hot_hand_tracker import HotHandTracker
 from src.analysis.alt_line_optimizer import AltLineOptimizer
+from src.services.injury_tracker import InjuryTracker
 
 def render(predictions):
     st.header("🧑‍💻 Player Explorer")
@@ -11,6 +12,25 @@ def render(predictions):
     names_roster = sorted(tracker.players['PLAYER_NAME'].unique().tolist()) if 'PLAYER_NAME' in tracker.players.columns else []
     all_names = sorted(set(names_pred) | set(names_roster))
     selected_player = st.selectbox("Search Player", options=all_names)
+    
+    # Show injury status
+    tracker_injury = InjuryTracker()
+    with st.spinner("Checking injury status..."):
+        try:
+            injury_status = tracker_injury.get_player_status(selected_player)
+            if injury_status['status'] != 'Unknown':
+                status_color = {
+                    'Healthy': '🟢',
+                    'Questionable': '🟡',
+                    'Out': '🔴'
+                }
+                icon = status_color.get(injury_status['status'], '⚪')
+                st.write(f"{icon} **Status:** {injury_status['status']}")
+                if injury_status.get('injury'):
+                    st.caption(f"Injury: {injury_status['injury']}")
+        except Exception as e:
+            st.caption(f"Injury status unavailable")
+    
     recent_n = st.slider("Recent games", 3, 20, 10)
     
     # Fetch gamelogs with timeout handling
