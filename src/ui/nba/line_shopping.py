@@ -52,9 +52,14 @@ def render(predictions):
         elif stat == 'assists':
             pred_val = float(row.iloc[0]['pred_assists'])
     
+    debug_mode = st.checkbox("🐛 Debug mode (show API details)", value=False)
+    
     if st.button("🔍 Fetch Live Odds", use_container_width=True):
         with st.spinner("Fetching odds from sportsbooks..."):
-            alt_lines_df = aggregator.get_alt_lines(selected_player, stat=stat)
+            # Enable debug if checkbox is on
+            if debug_mode:
+                st.info("🐛 Debug mode: Check console/logs for API response details")
+            alt_lines_df = aggregator.get_alt_lines(selected_player, stat=stat, debug=debug_mode)
             
             # Handle error responses (debug info)
             if isinstance(alt_lines_df, dict) and 'error' in alt_lines_df:

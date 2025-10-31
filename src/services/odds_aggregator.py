@@ -40,16 +40,18 @@ class OddsAggregator:
             print("   Get free key: https://the-odds-api.com/")
         self.base_url = "https://api.the-odds-api.com/v4"
         self.regions = ['us']  # US odds
-        self.markets = ['player_props']  # Player props (points, rebounds, etc.)
-        self.books = ['draftkings', 'fanduel', 'fanduel', 'espnbet', 'betmgm', 'caesars', 'pointsbet']
+        # Note: Player props market may vary by bookmaker - try both common names
+        self.markets = ['player_props', 'player_points', 'player_rebounds', 'player_assists']
+        self.books = ['draftkings', 'fanduel', 'espnbet', 'betmgm', 'caesars', 'pointsbet']
     
-    def get_player_props(self, sport='basketball_nba', event_id: Optional[str] = None):
+    def get_player_props(self, sport='basketball_nba', event_id: Optional[str] = None, debug: bool = False):
         """
         Get player props for NBA games
         
         Args:
             sport: 'basketball_nba'
             event_id: Specific game ID (optional, gets all today's games if None)
+            debug: If True, print detailed API response info
         
         Returns:
             DataFrame with columns: player, stat, line, over_odds, under_odds, book
@@ -63,17 +65,42 @@ class OddsAggregator:
             else:
                 url = f"{self.base_url}/sports/{sport}/odds"
             
+            # Try just 'player_props' first (most common)
+            # If that doesn't work, we'll log what markets are available
             params = {
                 'apiKey': self.api_key,
                 'regions': ','.join(self.regions),
-                'markets': ','.join(self.markets),
-                'bookmakers': ','.join(self.books[:5])  # Limit to avoid rate limits
+                'markets': 'player_props',  # Try single market first
+                'bookmakers': ','.join(self.books[:5]),  # Limit to avoid rate limits
+                'oddsFormat': 'american'  # Use American odds format
             }
             
-            response = requests.get(url, params=params, timeout=10)
+            response = requests.get(url, params=params, timeout=15)
             response.raise_for_status()
             
+            # Check rate limits from headers
+            remaining = response.headers.get('x-requests-remaining', 'unknown')
+            used = response.headers.get('x-requests-used', 'unknown')
+            if remaining != 'unknown':
+                print(f"📊 API Usage: {used} used, {remaining} remaining")
+            
             data = response.json()
+            
+            if debug:
+                print(f"🔍 API Response: {len(data)} events")
+                if len(data) > 0:
+                    first_event = data[0]
+                    print(f"   First event: {first_event.get('home_team')} vs {first_event.get('away_team')}")
+                    if 'bookmakers' in first_event and len(first_event['bookmakers']) > 0:
+                        first_book = first_event['bookmakers'][0]
+                        markets = [m.get('key') for m in first_book.get('markets', [])]
+                        print(f"   Available markets in {first_book.get('key')}: {markets}")
+            
+            # Debug: log available markets if no props found
+            if not data or len(data) == 0:
+                print("⚠️  No events returned from API")
+                print("💡 Tip: Check if there are NBA games scheduled for today")
+                return pd.DataFrame()
             
             # Parse player props
             props = []
@@ -91,12 +118,23 @@ class OddsAggregator:
                         continue
                     
                     for market in bookmaker['markets']:
-                        if market.get('key') != 'player_props':
+                        market_key = market.get('key', '').lower()
+                        # Accept various player prop market names
+                        if 'player' not in market_key and 'prop' not in market_key:
+                            # Log available markets for debugging (first time only)
+                            if not hasattr(self, '_logged_markets'):
+                                available_markets = [m.get('key') for m in bookmaker.get('markets', [])]
+                                print(f"📋 Available markets: {available_markets}")
+                                self._logged_markets = True
                             continue
                         
                         for outcome in market.get('outcomes', []):
                             player_name = outcome.get('name', '')
+                            # Description format varies: could be "Player Name Points Over X.X" or just "Over"
                             description = outcome.get('description', '').lower()
+                            
+                            # Also check name field - sometimes stat is in the name
+                            outcome_name = outcome.get('name', '').lower()
                             
                             # Extract stat type from description (e.g., "Points", "Rebounds", "Assists")
                             # Format: "Player Name Points Over/Under X.X"
@@ -121,8 +159,9 @@ class OddsAggregator:
                                 'block': 'blocks'
                             }
                             
+                            # Try matching in description first
                             for keyword, stat in stat_keywords.items():
-                                if keyword in description:
+                                if keyword in description or keyword in outcome_name:
                                     stat_type = stat
                                     break
                             
@@ -134,8 +173,15 @@ class OddsAggregator:
                                         stat_type = stat_keywords[word]
                                         break
                             
+                            # If still no match, try checking market key for stat hint
                             if not stat_type:
-                                stat_type = description  # Fallback
+                                for keyword, stat in stat_keywords.items():
+                                    if keyword in market_key:
+                                        stat_type = stat
+                                        break
+                            
+                            if not stat_type:
+                                stat_type = market_key if market_key else description  # Fallback
                             
                             point = outcome.get('point', 0)
                             price = outcome.get('price', 0)
@@ -273,13 +319,18 @@ class OddsAggregator:
         
         return pd.Index([])
     
-    def get_alt_lines(self, player_name: str, stat: str = 'points'):
+    def get_alt_lines(self, player_name: str, stat: str = 'points', debug: bool = False):
         """
         Get all alt lines for a player/stat across books
         
+        Args:
+            player_name: Name of player to search for
+            stat: Stat type ('points', 'rebounds', 'assists', etc.)
+            debug: If True, enable debug logging
+        
         Returns DataFrame with all available lines and odds
         """
-        props_df = self.get_player_props()
+        props_df = self.get_player_props(debug=debug)
         if props_df is None or len(props_df) == 0:
             return None
         
