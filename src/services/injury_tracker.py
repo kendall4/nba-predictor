@@ -6,7 +6,7 @@ Fetches player injury/health status from NBA API and other sources.
 
 import requests
 import pandas as pd
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from nba_api.stats.endpoints import commonplayerinfo
 from nba_api.stats.static import players as static_players
 import time
