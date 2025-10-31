@@ -23,9 +23,20 @@ class OddsAggregator:
     """
     
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv('ODDS_API_KEY')
+        # Try passed key, then Streamlit secrets, then env var
+        if not api_key:
+            try:
+                import streamlit as st
+                api_key = st.secrets.get('ODDS_API_KEY')
+            except (ImportError, AttributeError, FileNotFoundError):
+                pass
+        
+        if not api_key:
+            api_key = os.getenv('ODDS_API_KEY')
+        
+        self.api_key = api_key
         if not self.api_key:
-            print("⚠️  ODDS_API_KEY not found. Set it in .env or pass as argument.")
+            print("⚠️  ODDS_API_KEY not found. Set it in Streamlit secrets, .env, or pass as argument.")
             print("   Get free key: https://the-odds-api.com/")
         self.base_url = "https://api.the-odds-api.com/v4"
         self.regions = ['us']  # US odds

@@ -13,16 +13,24 @@ def render(predictions):
     st.header("💰 Line Shopping")
     st.caption("Compare odds across DraftKings, FanDuel, Fanatics, ESPN Bet, and more")
     
-    # Check for API key
-    import os
-    api_key = os.getenv('ODDS_API_KEY')
+    # Check for API key (try Streamlit secrets first, then env var)
+    api_key = None
+    try:
+        api_key = st.secrets.get('ODDS_API_KEY')
+    except (AttributeError, FileNotFoundError):
+        pass
+    
     if not api_key:
-        st.warning("⚠️ ODDS_API_KEY not set. Add it to your .env file or Streamlit secrets.")
+        import os
+        api_key = os.getenv('ODDS_API_KEY')
+    
+    if not api_key:
+        st.warning("⚠️ ODDS_API_KEY not set. Add it to Streamlit Cloud secrets or your .env file.")
         st.info("""
         To enable line shopping:
         1. Get free API key from https://the-odds-api.com/
-        2. Add to `.env`: `ODDS_API_KEY=your_key_here`
-        3. Or add to Streamlit Cloud secrets
+        2. **Streamlit Cloud**: Add to app settings → Secrets
+        3. **Local**: Add to `.streamlit/secrets.toml` or `.env`
         """)
         return
     
