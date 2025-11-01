@@ -69,24 +69,26 @@ class OddsAggregator:
                 else:
                     url = f"{self.base_url}/sports/{sport}/odds"
                 
-                # Try just 'player_props' first (most common)
-                # If that doesn't work, we'll log what markets are available
+                # Per official API docs: player_props is general, or use specific markets:
+                # player_points, player_rebounds, player_assists, etc.
+                # Using 'player_props' gets all player props in one request
                 params = {
                     'apiKey': self.api_key,
                     'regions': ','.join(self.regions),
-                    'markets': 'player_props',  # Try single market first
+                    'markets': 'player_props',  # General market (can also use player_points, player_rebounds, etc.)
                     'bookmakers': ','.join(self.books[:5]),  # Limit to avoid rate limits
-                    'oddsFormat': 'american'  # Use American odds format
+                    'oddsFormat': 'american'  # Use American odds format (per API docs)
                 }
                 
                 response = requests.get(url, params=params, timeout=20)
                 response.raise_for_status()
                 
-                # Check rate limits from headers
+                # Check rate limits and usage from headers (per official API docs)
                 remaining = response.headers.get('x-requests-remaining', 'unknown')
                 used = response.headers.get('x-requests-used', 'unknown')
+                last_cost = response.headers.get('x-requests-last', 'unknown')
                 if remaining != 'unknown' and debug:
-                    print(f"📊 API Usage: {used} used, {remaining} remaining")
+                    print(f"📊 API Usage: {used} used, {remaining} remaining (last request cost: {last_cost})")
                 
                 data = response.json()
                 break  # Success, exit retry loop
@@ -174,15 +176,16 @@ class OddsAggregator:
                             continue
                         
                         for outcome in market.get('outcomes', []):
-                            player_name = outcome.get('name', '')
-                            # Description format varies: could be "Player Name Points Over X.X" or just "Over"
-                            description = outcome.get('description', '').lower()
+                            # Per official API docs: name="Over"/"Under", description=player name
+                            outcome_type = outcome.get('name', '').lower()  # "over" or "under"
+                            player_name = outcome.get('description', '')  # Player name is in description
                             
-                            # Also check name field - sometimes stat is in the name
-                            outcome_name = outcome.get('name', '').lower()
+                            # Skip if missing required fields (per API structure)
+                            if not player_name or not outcome_type or outcome_type not in ['over', 'under']:
+                                continue
                             
-                            # Extract stat type from description (e.g., "Points", "Rebounds", "Assists")
-                            # Format: "Player Name Points Over/Under X.X"
+                            # Extract stat type from market key (e.g., "player_points", "player_rebounds")
+                            # Market keys can be: player_props, player_points, player_rebounds, player_assists, etc.
                             stat_type = ''
                             stat_keywords = {
                                 'points': 'points',
@@ -204,35 +207,30 @@ class OddsAggregator:
                                 'block': 'blocks'
                             }
                             
-                            # Try matching in description first
+                            # Extract stat from market key (most reliable)
+                            market_key_lower = market_key.lower()
                             for keyword, stat in stat_keywords.items():
-                                if keyword in description or keyword in outcome_name:
+                                if keyword in market_key_lower:
                                     stat_type = stat
                                     break
                             
+                            # If market key didn't reveal stat, try to infer from outcome data
                             if not stat_type:
-                                # Try to extract from description more broadly
-                                desc_words = description.split()
-                                for word in desc_words:
-                                    if word in stat_keywords:
-                                        stat_type = stat_keywords[word]
-                                        break
+                                # Try common market key patterns
+                                if 'player_points' in market_key_lower or 'points' in market_key_lower:
+                                    stat_type = 'points'
+                                elif 'player_rebounds' in market_key_lower or 'rebounds' in market_key_lower:
+                                    stat_type = 'rebounds'
+                                elif 'player_assists' in market_key_lower or 'assists' in market_key_lower:
+                                    stat_type = 'assists'
+                                else:
+                                    stat_type = 'unknown'  # Will be filtered later if needed
                             
-                            # If still no match, try checking market key for stat hint
-                            if not stat_type:
-                                for keyword, stat in stat_keywords.items():
-                                    if keyword in market_key:
-                                        stat_type = stat
-                                        break
+                            point = outcome.get('point', 0)  # Line value
+                            price = outcome.get('price', 0)   # Odds (American format)
                             
-                            if not stat_type:
-                                stat_type = market_key if market_key else description  # Fallback
-                            
-                            point = outcome.get('point', 0)
-                            price = outcome.get('price', 0)
-                            
-                            # Determine over/under from outcome type
-                            is_over = 'over' in description
+                            # Determine over/under from name field
+                            is_over = outcome_type == 'over'
                             
                             props.append({
                                 'game_id': game_id,
