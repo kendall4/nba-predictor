@@ -161,8 +161,8 @@ def get_todays_games():
 with tab_nba:
     # Show today's games
     st.header("📅 Today's Games")
-    with st.spinner("Fetching today's games..."):
-        games = get_todays_games()
+    # Remove blocking spinner - use cached data instead
+    games = get_todays_games()
 
     cols = st.columns(min(len(games), 4))
     for i, game in enumerate(games):
@@ -184,78 +184,81 @@ with tab_nba:
         st.caption("Generates predictions once and reuses them across tabs for faster UX.")
 
     if generate or st.session_state['predictions'] is None:
-        with st.spinner("Analyzing all players... This may take a moment"):
-            analyzer = ValueAnalyzer()
-            predictions = analyzer.analyze_games(games)
-            predictions = predictions[predictions['minutes'] >= min_minutes]
-            predictions = predictions[predictions['overall_value'] >= min_value]
+        # Show a status message but don't block the UI
+        status_placeholder = st.empty()
+        status_placeholder.info("🔄 Generating predictions... This may take a moment")
+        analyzer = ValueAnalyzer()
+        predictions = analyzer.analyze_games(games)
+        predictions = predictions[predictions['minutes'] >= min_minutes]
+        predictions = predictions[predictions['overall_value'] >= min_value]
+        
+        # Filter out injured/out players if enabled
+        # Optimization: Only check top 50 players (where most value plays are)
+        if filter_injured:
+            from src.services.injury_tracker import InjuryTracker
+            import os
+            injury_tracker = InjuryTracker(api_key=os.getenv('ROTOWIRE_API_KEY'))
             
-            # Filter out injured/out players if enabled
-            # Optimization: Only check top 50 players (where most value plays are)
-            if filter_injured:
-                from src.services.injury_tracker import InjuryTracker
-                import os
-                injury_tracker = InjuryTracker(api_key=os.getenv('ROTOWIRE_API_KEY'))
+            # Sort first, then only check top players (faster)
+            predictions_sorted = predictions.sort_values('overall_value', ascending=False)
+            top_n_to_check = min(50, len(predictions_sorted))  # Only check top 50
+            top_players = predictions_sorted.head(top_n_to_check)
+            rest_players = predictions_sorted.iloc[top_n_to_check:]
+            
+            healthy_players = []
+            injured_count = 0
+            questionable_count = 0
+            
+            if top_n_to_check > 0:
+                st.write(f"Checking injury status for top {top_n_to_check} players...")
+                progress_bar = st.progress(0)
                 
-                # Sort first, then only check top players (faster)
-                predictions_sorted = predictions.sort_values('overall_value', ascending=False)
-                top_n_to_check = min(50, len(predictions_sorted))  # Only check top 50
-                top_players = predictions_sorted.head(top_n_to_check)
-                rest_players = predictions_sorted.iloc[top_n_to_check:]
-                
-                healthy_players = []
-                injured_count = 0
-                questionable_count = 0
-                
-                if top_n_to_check > 0:
-                    st.write(f"Checking injury status for top {top_n_to_check} players...")
-                    progress_bar = st.progress(0)
-                    
-                    for idx, (_, row) in enumerate(top_players.iterrows()):
-                        player_name = row['player_name']
-                        try:
-                            status = injury_tracker.get_player_status(player_name)
-                            
-                            # Filter out "Out" status
-                            if status['status'] == 'Out':
-                                injured_count += 1
-                                continue
-                            
-                            # Optionally filter "Questionable" based on toggle
-                            if status['status'] == 'Questionable' and not include_questionable:
-                                questionable_count += 1
-                                continue
-                            
-                            if status['status'] == 'Questionable':
-                                questionable_count += 1
-                            
-                            healthy_players.append(row)
-                        except Exception:
-                            # If injury check fails, include player (fail-safe)
-                            healthy_players.append(row)
+                for idx, (_, row) in enumerate(top_players.iterrows()):
+                    player_name = row['player_name']
+                    try:
+                        status = injury_tracker.get_player_status(player_name)
                         
-                        # Update progress every player
-                        progress_bar.progress((idx + 1) / top_n_to_check)
+                        # Filter out "Out" status
+                        if status['status'] == 'Out':
+                            injured_count += 1
+                            continue
+                        
+                        # Optionally filter "Questionable" based on toggle
+                        if status['status'] == 'Questionable' and not include_questionable:
+                            questionable_count += 1
+                            continue
+                        
+                        if status['status'] == 'Questionable':
+                            questionable_count += 1
+                        
+                        healthy_players.append(row)
+                    except Exception:
+                        # If injury check fails, include player (fail-safe)
+                        healthy_players.append(row)
                     
-                    progress_bar.empty()
+                    # Update progress every player
+                    progress_bar.progress((idx + 1) / top_n_to_check)
                 
-                # Include rest of players without injury check (assume healthy)
-                # This speeds things up significantly
-                for _, row in rest_players.iterrows():
-                    healthy_players.append(row)
-                
-                status_msg = []
-                if injured_count > 0:
-                    status_msg.append(f"❌ {injured_count} out")
-                if questionable_count > 0 and include_questionable:
-                    status_msg.append(f"⚠️ {questionable_count} questionable")
-                if status_msg:
-                    st.info("Injury filter: " + " | ".join(status_msg))
-                
-                predictions = pd.DataFrame(healthy_players)
-            predictions = predictions.sort_values('overall_value', ascending=False)
-            st.session_state['predictions'] = predictions
-        st.success(f"✅ Generated predictions for {len(st.session_state['predictions'])} players!")
+                progress_bar.empty()
+            
+            # Include rest of players without injury check (assume healthy)
+            # This speeds things up significantly
+            for _, row in rest_players.iterrows():
+                healthy_players.append(row)
+            
+            status_msg = []
+            if injured_count > 0:
+                status_msg.append(f"❌ {injured_count} out")
+            if questionable_count > 0 and include_questionable:
+                status_msg.append(f"⚠️ {questionable_count} questionable")
+            if status_msg:
+                st.info("Injury filter: " + " | ".join(status_msg))
+            
+            predictions = pd.DataFrame(healthy_players)
+        predictions = predictions.sort_values('overall_value', ascending=False)
+        st.session_state['predictions'] = predictions
+        status_placeholder.empty()
+    st.success(f"✅ Generated predictions for {len(st.session_state['predictions'])} players!")
 
     predictions = st.session_state['predictions']
     if predictions is None or len(predictions) == 0:

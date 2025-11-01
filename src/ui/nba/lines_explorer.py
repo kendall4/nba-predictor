@@ -13,31 +13,41 @@ def find_matching_odds(player_name, stat, target_line, odds_df):
     if odds_df is None or len(odds_df) == 0:
         return None, None, None
     
+    # Check if required columns exist
+    required_cols = ['player', 'stat', 'line', 'over_odds', 'under_odds', 'book']
+    if not all(col in odds_df.columns for col in required_cols):
+        return None, None, None
+    
     # Normalize player name for matching
     def normalize_name(name):
-        return name.lower().strip().replace('.', '').replace("'", '')
+        if pd.isna(name):
+            return ""
+        return str(name).lower().strip().replace('.', '').replace("'", '')
     
     target_name_norm = normalize_name(player_name)
     stat_lower = stat.lower()
     
     # Filter by stat (try various matches)
     stat_match = odds_df[
-        odds_df['stat'].str.contains(stat_lower, case=False, na=False)
-    ]
+        odds_df['stat'].astype(str).str.contains(stat_lower, case=False, na=False)
+    ].copy()
     
     if len(stat_match) == 0:
         return None, None, None
     
+    # Normalize player names in odds_df for matching
+    stat_match['player_norm'] = stat_match['player'].apply(normalize_name)
+    
     # Try to find exact player name match, then fuzzy match
     player_match = stat_match[
-        stat_match['player'].apply(lambda x: normalize_name(str(x))).str.contains(target_name_norm, case=False, na=False)
+        stat_match['player_norm'].str.contains(target_name_norm, case=False, na=False)
     ]
     
     if len(player_match) == 0:
         # Try last name match
         last_name = player_name.split()[-1] if len(player_name.split()) > 0 else player_name
         player_match = stat_match[
-            stat_match['player'].str.contains(last_name, case=False, na=False)
+            stat_match['player'].astype(str).str.contains(last_name, case=False, na=False)
         ]
     
     if len(player_match) == 0:
@@ -52,11 +62,11 @@ def find_matching_odds(player_name, stat, target_line, odds_df):
         return None, None, None
     
     best_match = closest.iloc[0]
-    return (
-        int(best_match['over_odds']) if pd.notna(best_match.get('over_odds')) else None,
-        int(best_match['under_odds']) if pd.notna(best_match.get('under_odds')) else None,
-        best_match.get('book', 'N/A')
-    )
+    over_odds = int(best_match['over_odds']) if pd.notna(best_match.get('over_odds')) and best_match.get('over_odds') is not None else None
+    under_odds = int(best_match['under_odds']) if pd.notna(best_match.get('under_odds')) and best_match.get('under_odds') is not None else None
+    book = str(best_match.get('book', 'N/A'))
+    
+    return over_odds, under_odds, book
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def _fetch_cached_odds():
@@ -84,17 +94,22 @@ def render(predictions):
         try:
             aggregator = OddsAggregator()
             if aggregator.api_key:
-                with st.spinner("📊 Fetching live odds from sportsbooks..."):
-                    # Use cached data to avoid multiple API calls
-                    odds_data = _fetch_cached_odds()
-                    if odds_data is not None and len(odds_data) > 0:
-                        st.success(f"✅ Found odds for {odds_data['player'].nunique()} players")
-                    else:
-                        st.warning("⚠️ No odds found. Odds may not be available yet.")
+                # Use cached data to avoid multiple API calls
+                odds_data = _fetch_cached_odds()
+                if odds_data is not None and len(odds_data) > 0:
+                    st.success(f"✅ Found odds for {odds_data['player'].nunique()} players ({len(odds_data)} total props)")
+                    # Debug: show sample of stats found
+                    if 'stat' in odds_data.columns:
+                        stats_found = odds_data['stat'].unique().tolist()
+                        st.caption(f"Stats available: {', '.join(stats_found[:10])}")
+                else:
+                    st.warning("⚠️ No odds found. Odds may not be available yet or API returned empty.")
             else:
                 st.info("💡 Set ODDS_API_KEY in secrets to view live odds")
         except Exception as e:
-            st.error(f"❌ Error fetching odds: {e}")
+            st.error(f"❌ Error fetching odds: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
             odds_data = None
     
     rows = []

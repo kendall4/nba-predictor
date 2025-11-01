@@ -224,10 +224,19 @@ class OddsAggregator:
                                 elif 'player_assists' in market_key_lower or 'assists' in market_key_lower:
                                     stat_type = 'assists'
                                 else:
-                                    stat_type = 'unknown'  # Will be filtered later if needed
+                                    # Skip unknown stats - don't add to props
+                                    continue
+                            
+                            # Skip if we still don't have a valid stat type
+                            if not stat_type or stat_type == 'unknown':
+                                continue
                             
                             point = outcome.get('point', 0)  # Line value
                             price = outcome.get('price', 0)   # Odds (American format)
+                            
+                            # Skip if missing critical data
+                            if not point or not price:
+                                continue
                             
                             # Determine over/under from name field
                             is_over = outcome_type == 'over'
