@@ -53,11 +53,20 @@ def calculate_implied_prob_from_line(line: float, prediction: float, std_dev: fl
     if std_dev is None:
         std_dev = prediction * 0.20  # 20% variance assumption
     
+    # Prevent division by zero - ensure std_dev is at least 0.5
+    if std_dev < 0.5:
+        std_dev = max(0.5, abs(prediction) * 0.1)  # Use 10% of prediction or 0.5, whichever is larger
+    
+    # If prediction is zero or very small, return neutral probability
+    if abs(prediction) < 0.1:
+        return 0.5
+    
     # Z-score
     z = (line - prediction) / std_dev
     
     # Probability of being over the line
     prob_over = 1 - norm.cdf(z)
     
-    return prob_over
+    # Clamp to valid range [0, 1]
+    return max(0.0, min(1.0, prob_over))
 
