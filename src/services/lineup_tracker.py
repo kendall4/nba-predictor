@@ -47,52 +47,63 @@ class LineupTracker:
         if cache_key in self.cache:
             return self.cache[cache_key]
         
-        try:
-            url = f"{self.base_url}/nba/lineups"
-            headers = {
-                'Authorization': f'Bearer {self.api_key}',
-                'Content-Type': 'application/json'
-            }
-            params = {
-                'date': date,
-                'apikey': self.api_key  # Some APIs use this format
-            }
-            
-            response = requests.get(url, headers=headers, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
+        max_retries = 2
+        import time
+        for attempt in range(max_retries + 1):
+            try:
+                url = f"{self.base_url}/nba/lineups"
+                headers = {
+                    'Authorization': f'Bearer {self.api_key}',
+                    'Content-Type': 'application/json'
+                }
+                params = {
+                    'date': date,
+                    'apikey': self.api_key  # Some APIs use this format
+                }
                 
-                # Parse lineup data (structure may vary)
-                lineups = []
-                if isinstance(data, list):
-                    for game in data:
-                        self._parse_lineup_game(game, lineups)
-                elif isinstance(data, dict):
-                    if 'games' in data:
-                        for game in data['games']:
+                response = requests.get(url, headers=headers, params=params, timeout=15)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Parse lineup data (structure may vary)
+                    lineups = []
+                    if isinstance(data, list):
+                        for game in data:
                             self._parse_lineup_game(game, lineups)
-                    elif 'lineups' in data:
-                        lineups = pd.DataFrame(data['lineups'])
-                        self.cache[cache_key] = lineups
-                        return lineups
-                
-                if lineups:
-                    df = pd.DataFrame(lineups)
-                    self.cache[cache_key] = df
-                    return df
+                    elif isinstance(data, dict):
+                        if 'games' in data:
+                            for game in data['games']:
+                                self._parse_lineup_game(game, lineups)
+                        elif 'lineups' in data:
+                            lineups = pd.DataFrame(data['lineups'])
+                            self.cache[cache_key] = lineups
+                            return lineups
+                    
+                    if lineups:
+                        df = pd.DataFrame(lineups)
+                        self.cache[cache_key] = df
+                        return df
+                    return None
+                    
+                elif response.status_code == 401:
+                    if attempt >= max_retries:
+                        print("❌ Invalid Rotowire API key")
+                    return None
+                else:
+                    if attempt >= max_retries:
+                        print(f"⚠️  Rotowire API error: {response.status_code}")
+                    return None
+                    
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                if attempt < max_retries:
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
                 return None
-                
-            elif response.status_code == 401:
-                print("❌ Invalid Rotowire API key")
+            except Exception as e:
+                if attempt >= max_retries:
+                    print(f"⚠️  Error fetching Rotowire lineups: {e}")
                 return None
-            else:
-                print(f"⚠️  Rotowire API error: {response.status_code}")
-                return None
-                
-        except Exception as e:
-            print(f"⚠️  Error fetching Rotowire lineups: {e}")
-            return None
     
     def _parse_lineup_game(self, game: dict, lineups: list):
         """Parse a single game's lineup data"""

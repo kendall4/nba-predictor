@@ -124,32 +124,38 @@ with st.sidebar:
 # Get today's games
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_todays_games():
-    try:
-        board = scoreboard.ScoreBoard()
-        games = board.games.get_dict()
-        
-        game_list = []
-        for game in games:
-            game_list.append({
-                'home': game['homeTeam']['teamTricode'],
-                'away': game['awayTeam']['teamTricode'],
-                'status': game['gameStatusText']
-            })
-        
-        if len(game_list) == 0:
-            # Fallback games
-            game_list = [
-                {'home': 'LAL', 'away': 'GSW', 'status': 'Example'},
-                {'home': 'BOS', 'away': 'MIA', 'status': 'Example'}
-            ]
-        
-        return game_list
-    except Exception as e:
-        st.error(f"Error fetching games: {e}")
-        return [
-            {'home': 'LAL', 'away': 'GSW', 'status': 'Example'},
-            {'home': 'BOS', 'away': 'MIA', 'status': 'Example'}
-        ]
+    """Get today's games with timeout handling"""
+    max_retries = 1
+    for attempt in range(max_retries + 1):
+        try:
+            board = scoreboard.ScoreBoard()
+            games = board.games.get_dict()
+            
+            game_list = []
+            for game in games:
+                game_list.append({
+                    'home': game['homeTeam']['teamTricode'],
+                    'away': game['awayTeam']['teamTricode'],
+                    'status': game['gameStatusText']
+                })
+            
+            if len(game_list) > 0:
+                return game_list
+            else:
+                # Fallback if no games today
+                return [
+                    {'home': 'LAL', 'away': 'GSW', 'status': 'Example'},
+                    {'home': 'BOS', 'away': 'MIA', 'status': 'Example'}
+                ]
+        except Exception as e:
+            if attempt >= max_retries:
+                # Return fallback games on final failure
+                return [
+                    {'home': 'LAL', 'away': 'GSW', 'status': 'Example'},
+                    {'home': 'BOS', 'away': 'MIA', 'status': 'Example'}
+                ]
+            import time
+            time.sleep(0.5)  # Quick retry delay
 
 with tab_nba:
     # Show today's games

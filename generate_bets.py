@@ -25,23 +25,28 @@ from src.features.matchup_features import MatchupFeatureBuilder
 from nba_api.live.nba.endpoints import scoreboard
 
 def get_todays_games():
-    """Get today's NBA games"""
-    try:
-        board = scoreboard.ScoreBoard()
-        games = board.games.get_dict()
-        
-        game_list = []
-        for game in games:
-            game_list.append({
-                'home': game['homeTeam']['teamTricode'],
-                'away': game['awayTeam']['teamTricode'],
-                'status': game['gameStatusText']
-            })
-        
-        return game_list if len(game_list) > 0 else None
-    except Exception as e:
-        print(f"⚠️  Error fetching games: {e}")
-        return None
+    """Get today's NBA games with timeout handling"""
+    max_retries = 1
+    import time
+    for attempt in range(max_retries + 1):
+        try:
+            board = scoreboard.ScoreBoard()
+            games = board.games.get_dict()
+            
+            game_list = []
+            for game in games:
+                game_list.append({
+                    'home': game['homeTeam']['teamTricode'],
+                    'away': game['awayTeam']['teamTricode'],
+                    'status': game['gameStatusText']
+                })
+            
+            return game_list if len(game_list) > 0 else None
+        except Exception as e:
+            if attempt >= max_retries:
+                print(f"⚠️  Error fetching games: {e}")
+                return None
+            time.sleep(0.5)  # Quick retry delay
 
 def main():
     # Parse arguments

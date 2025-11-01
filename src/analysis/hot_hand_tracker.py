@@ -87,13 +87,30 @@ class HotHandTracker:
                 pass
 
         # Fetch from NBA API with retry logic and timeout handling
-        max_retries = 2
+        max_retries = 1  # Reduced to 1 retry for faster failure
         df = None
+        
         for attempt in range(max_retries + 1):
             try:
                 logs = playergamelog.PlayerGameLog(player_id=pid, season=season, season_type_all_star='Regular Season')
                 df = logs.get_data_frames()[0]
-                break  # Success, exit retry loop
+                
+                # Check if dataframe is empty (no games in season yet)
+                if df is not None and len(df) > 0:
+                    break  # Success, exit retry loop
+                elif df is not None and len(df) == 0:
+                    # Empty dataframe - season might not have started yet
+                    # Try previous season as fallback (only if current season is 2025-26)
+                    if season == '2025-26':
+                        try:
+                            logs_prev = playergamelog.PlayerGameLog(player_id=pid, season='2024-25', season_type_all_star='Regular Season')
+                            df = logs_prev.get_data_frames()[0]
+                            if df is not None and len(df) > 0:
+                                break
+                        except Exception:
+                            pass
+                    return df  # Return empty or fallback
+                
             except Exception as e:
                 error_str = str(e).lower()
                 is_timeout = (
@@ -103,14 +120,26 @@ class HotHandTracker:
                     'HTTPSConnectionPool' in str(e)
                 )
                 
-                # If it's the last attempt or not a timeout, give up
-                if attempt >= max_retries or not is_timeout:
-                    # Suppress timeout errors - they're noisy
+                # If it's the last attempt, try fallback then give up
+                if attempt >= max_retries:
+                    # Quick fallback to previous season if current season fails
+                    if season == '2025-26':
+                        try:
+                            logs_prev = playergamelog.PlayerGameLog(player_id=pid, season='2024-25', season_type_all_star='Regular Season')
+                            df = logs_prev.get_data_frames()[0]
+                            if df is not None and len(df) > 0:
+                                break
+                        except Exception:
+                            pass
                     return None
                 
-                # Wait before retrying with exponential backoff
-                delay = min(1.5 * (2 ** attempt), 5.0)
-                time.sleep(delay)
+                # For timeouts, quick retry (reduced delays)
+                if is_timeout:
+                    delay = 0.5  # Much shorter delay - just 500ms
+                    time.sleep(delay)
+                else:
+                    # For non-timeout errors, give up immediately
+                    return None
         
         # If we got here but df is still None, something went wrong
         if df is None:
