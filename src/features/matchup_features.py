@@ -145,14 +145,29 @@ class MatchupFeatureBuilder:
         opp = opp.iloc[0]
         
         # Calculate expected game pace (average of both teams)
-        expected_pace = (player_team['PACE'] + opp['PACE']) / 2
+        # Cap PACE values to reasonable range (90-105) to prevent inflation
+        # Normal NBA pace is ~95-100 possessions per 48 minutes
+        player_pace = float(player_team['PACE'])
+        opp_pace = float(opp['PACE'])
+        if player_pace > 105 or player_pace < 90:
+            player_pace = 98.0  # Use league average
+        if opp_pace > 105 or opp_pace < 90:
+            opp_pace = 98.0  # Use league average
+        
+        expected_pace = (player_pace + opp_pace) / 2
         
         # Pace adjustment factor (high pace = more opportunities)
         pace_factor = expected_pace / 100.0  # 100 is average pace
         
         # Defense adjustment (high DEF_RATING = weak defense = more points allowed)
         # NBA average DEF_RATING is ~112-115
-        def_factor = opp['DEF_RATING'] / 112.0
+        # Cap DEF_RATING to reasonable range (100-130) to prevent inflated predictions
+        def_rating = float(opp['DEF_RATING'])
+        if def_rating > 130 or def_rating < 80:
+            # If value seems wrong (too high/low), use league average
+            # This handles data quality issues
+            def_rating = 112.0
+        def_factor = def_rating / 112.0
         
         # Build features
         features = {
@@ -170,8 +185,8 @@ class MatchupFeatureBuilder:
             
             # Matchup factors
             'expected_pace': expected_pace,
-            'opponent_def_rating': opp['DEF_RATING'],
-            'opponent_off_rating': opp['OFF_RATING'],
+            'opponent_def_rating': def_rating,  # Use capped value
+            'opponent_off_rating': float(opp['OFF_RATING']) if float(opp['OFF_RATING']) <= 130 else 110.0,  # Cap OFF_RATING too
             'pace_factor': pace_factor,
             'def_factor': def_factor,
         }
