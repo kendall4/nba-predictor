@@ -4,6 +4,8 @@ from datetime import datetime
 from nba_api.stats.static import players as static_players
 from nba_api.stats.endpoints import playergamelog
 import os
+import time
+import warnings
 
 STAT_COL_MAP = {
     'points': 'PTS',
@@ -84,13 +86,34 @@ class HotHandTracker:
             except Exception:
                 pass
 
-        # Fetch from NBA API with timeout handling
-        try:
-            logs = playergamelog.PlayerGameLog(player_id=pid, season=season, season_type_all_star='Regular Season')
-            df = logs.get_data_frames()[0]
-        except Exception as e:
-            # If API call fails (timeout, rate limit, etc.), return None
-            # UI will show friendly message
+        # Fetch from NBA API with retry logic and timeout handling
+        max_retries = 2
+        df = None
+        for attempt in range(max_retries + 1):
+            try:
+                logs = playergamelog.PlayerGameLog(player_id=pid, season=season, season_type_all_star='Regular Season')
+                df = logs.get_data_frames()[0]
+                break  # Success, exit retry loop
+            except Exception as e:
+                error_str = str(e).lower()
+                is_timeout = (
+                    'timeout' in error_str or
+                    'read timed out' in error_str or
+                    'connection' in error_str or
+                    'HTTPSConnectionPool' in str(e)
+                )
+                
+                # If it's the last attempt or not a timeout, give up
+                if attempt >= max_retries or not is_timeout:
+                    # Suppress timeout errors - they're noisy
+                    return None
+                
+                # Wait before retrying with exponential backoff
+                delay = min(1.5 * (2 ** attempt), 5.0)
+                time.sleep(delay)
+        
+        # If we got here but df is still None, something went wrong
+        if df is None:
             return None
         
         wanted_cols = ['GAME_DATE', 'MATCHUP', 'PTS', 'REB', 'AST', 'FG3M']

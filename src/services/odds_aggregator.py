@@ -57,35 +57,79 @@ class OddsAggregator:
             DataFrame with columns: player, stat, line, over_odds, under_odds, book
         """
         if not self.api_key:
+            if debug:
+                print("⚠️  ODDS_API_KEY not set")
             return None
         
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                if event_id:
+                    url = f"{self.base_url}/sports/{sport}/events/{event_id}/odds"
+                else:
+                    url = f"{self.base_url}/sports/{sport}/odds"
+                
+                # Try just 'player_props' first (most common)
+                # If that doesn't work, we'll log what markets are available
+                params = {
+                    'apiKey': self.api_key,
+                    'regions': ','.join(self.regions),
+                    'markets': 'player_props',  # Try single market first
+                    'bookmakers': ','.join(self.books[:5]),  # Limit to avoid rate limits
+                    'oddsFormat': 'american'  # Use American odds format
+                }
+                
+                response = requests.get(url, params=params, timeout=20)
+                response.raise_for_status()
+                
+                # Check rate limits from headers
+                remaining = response.headers.get('x-requests-remaining', 'unknown')
+                used = response.headers.get('x-requests-used', 'unknown')
+                if remaining != 'unknown' and debug:
+                    print(f"📊 API Usage: {used} used, {remaining} remaining")
+                
+                data = response.json()
+                break  # Success, exit retry loop
+                
+            except requests.exceptions.Timeout as e:
+                if attempt < max_retries:
+                    if debug:
+                        print(f"⚠️  Request timeout (attempt {attempt + 1}/{max_retries + 1}), retrying...")
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                if debug:
+                    print(f"❌ Request timeout after {max_retries + 1} attempts")
+                return pd.DataFrame()
+            except requests.exceptions.RequestException as e:
+                # Don't retry on auth errors or client errors
+                if hasattr(e, 'response') and e.response is not None:
+                    if e.response.status_code in [401, 403]:
+                        if debug:
+                            print(f"❌ Authentication error: {e.response.status_code}")
+                        return None
+                    elif e.response.status_code == 429:
+                        if debug:
+                            print(f"⚠️  Rate limit exceeded (attempt {attempt + 1}/{max_retries + 1})")
+                        if attempt < max_retries:
+                            time.sleep(5 * (attempt + 1))
+                            continue
+                if debug:
+                    print(f"❌ Request error: {e}")
+                return None
+            except Exception as e:
+                if debug:
+                    print(f"❌ Unexpected error: {e}")
+                return None
+        
+        # Process response data (outside retry loop, only if we succeeded)
+        # Note: data is only set if we successfully got a response
+        if 'data' not in locals():
+            # All retries failed, return empty DataFrame
+            if debug:
+                print("⚠️  All retry attempts failed")
+            return pd.DataFrame()
+        
         try:
-            if event_id:
-                url = f"{self.base_url}/sports/{sport}/events/{event_id}/odds"
-            else:
-                url = f"{self.base_url}/sports/{sport}/odds"
-            
-            # Try just 'player_props' first (most common)
-            # If that doesn't work, we'll log what markets are available
-            params = {
-                'apiKey': self.api_key,
-                'regions': ','.join(self.regions),
-                'markets': 'player_props',  # Try single market first
-                'bookmakers': ','.join(self.books[:5]),  # Limit to avoid rate limits
-                'oddsFormat': 'american'  # Use American odds format
-            }
-            
-            response = requests.get(url, params=params, timeout=15)
-            response.raise_for_status()
-            
-            # Check rate limits from headers
-            remaining = response.headers.get('x-requests-remaining', 'unknown')
-            used = response.headers.get('x-requests-used', 'unknown')
-            if remaining != 'unknown':
-                print(f"📊 API Usage: {used} used, {remaining} remaining")
-            
-            data = response.json()
-            
             if debug:
                 print(f"🔍 API Response: {len(data)} events")
                 if len(data) > 0:
@@ -98,8 +142,9 @@ class OddsAggregator:
             
             # Debug: log available markets if no props found
             if not data or len(data) == 0:
-                print("⚠️  No events returned from API")
-                print("💡 Tip: Check if there are NBA games scheduled for today")
+                if debug:
+                    print("⚠️  No events returned from API")
+                    print("💡 Tip: Check if there are NBA games scheduled for today")
                 return pd.DataFrame()
             
             # Parse player props
@@ -121,10 +166,10 @@ class OddsAggregator:
                         market_key = market.get('key', '').lower()
                         # Accept various player prop market names
                         if 'player' not in market_key and 'prop' not in market_key:
-                            # Log available markets for debugging (first time only)
-                            if not hasattr(self, '_logged_markets'):
+                            # Log available markets for debugging
+                            if debug and not hasattr(self, '_logged_markets'):
                                 available_markets = [m.get('key') for m in bookmaker.get('markets', [])]
-                                print(f"📋 Available markets: {available_markets}")
+                                print(f"📋 Available markets in {book_name}: {available_markets}")
                                 self._logged_markets = True
                             continue
                         
@@ -202,9 +247,17 @@ class OddsAggregator:
                             })
             
             if not props:
+                if debug:
+                    print("⚠️  No player props found in API response")
+                    print("💡 Available markets might not include player props, or no games today")
                 return pd.DataFrame()
             
             df = pd.DataFrame(props)
+            
+            if debug:
+                print(f"✅ Found {len(df)} player props from {df['book'].nunique()} books")
+                print(f"   Unique players: {df['player'].nunique()}")
+                print(f"   Unique stats: {df['stat'].unique().tolist()}")
             
             # Group by player/stat/line and pivot to get over/under side by side
             comparison = []
@@ -222,7 +275,7 @@ class OddsAggregator:
                 })
             
             return pd.DataFrame(comparison)
-            
+        
         except requests.exceptions.RequestException as e:
             print(f"❌ Error fetching odds: {e}")
             if hasattr(e, 'response') and e.response is not None:
@@ -332,6 +385,8 @@ class OddsAggregator:
         """
         props_df = self.get_player_props(debug=debug)
         if props_df is None or len(props_df) == 0:
+            if debug:
+                print("⚠️  No player props data available (no games today or API issue)")
             return None
         
         # Normalize stat name

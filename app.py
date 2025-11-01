@@ -6,6 +6,13 @@ from nba_api.live.nba.endpoints import scoreboard
 from datetime import datetime
 from src.analysis.hot_hand_tracker import HotHandTracker
 
+# Suppress verbose urllib3 timeout warnings from NBA API
+import logging
+import warnings
+logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", message=".*timeout.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*HTTPSConnectionPool.*", category=UserWarning)
+
 from src.ui.nba import leaderboard as ui_leader
 from src.ui.nba import predictions as ui_preds
 from src.ui.nba import hot_hand as ui_hot
