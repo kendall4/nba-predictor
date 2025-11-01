@@ -39,21 +39,21 @@ def render(predictions, games):
     # Filters
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        stat_filter = st.selectbox("Stat", options=["points", "rebounds", "assists"], index=0)
+        stat_filter = st.selectbox("Stat", options=["points", "rebounds", "assists"], index=0, key="ev_plus_stat")
     with col2:
-        only_ev_plus = st.checkbox("Show only EV+ bets", value=False, help="Filter to only positive EV bets")
-        min_ev = st.slider("Min EV (if filtering)", 0.0, 0.5, 0.05, 0.01, help="Minimum Expected Value") if only_ev_plus else None
+        only_ev_plus = st.checkbox("Show only EV+ bets", value=False, help="Filter to only positive EV bets", key="ev_plus_only_positive")
+        min_ev = st.slider("Min EV (if filtering)", 0.0, 0.5, 0.05, 0.01, help="Minimum Expected Value", key="ev_plus_min_ev") if only_ev_plus else None
     with col3:
-        sort_by = st.selectbox("Sort by", options=["EV (highest)", "EV (lowest)", "Odds (highest)", "Odds (lowest)", "Line"], index=0)
+        sort_by = st.selectbox("Sort by", options=["EV (highest)", "EV (lowest)", "Odds (highest)", "Odds (lowest)", "Line"], index=0, key="ev_plus_sort")
     with col4:
-        show_mainline_only = st.checkbox("Mainline only (≤ +200)", value=False)
-        show_longshot_only = st.checkbox("Longshots only (≥ +500)", value=False)
+        show_mainline_only = st.checkbox("Mainline only (≤ +200)", value=False, key="ev_plus_mainline")
+        show_longshot_only = st.checkbox("Longshots only (≥ +500)", value=False, key="ev_plus_longshot")
     
     # Generate EV+ bets
     generator = BetGenerator(odds_api_key=api_key)
     optimizer = AltLineOptimizer()
     
-    if st.button("🔍 Find EV+ Bets", type="primary", use_container_width=True):
+    if st.button("🔍 Find EV+ Bets", type="primary", use_container_width=True, key="ev_plus_find_bets"):
         with st.spinner("Analyzing odds and calculating EV..."):
             try:
                 # Get all bets for this stat (include all EV values)
@@ -194,7 +194,8 @@ def render(predictions, games):
                 csv,
                 f"ev_plus_{stat_filter}_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
                 "text/csv",
-                use_container_width=True
+                use_container_width=True,
+                key="ev_plus_download_csv"
             )
     
     # Show info about EV+
