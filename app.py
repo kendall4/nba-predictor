@@ -23,11 +23,12 @@ from src.ui.nba import games as ui_games
 from src.ui.nba import line_shopping as ui_shopping
 from src.ui.nba import ev_plus as ui_ev_plus
 
-# Page config
+# Page config - optimized for mobile
 st.set_page_config(
     page_title="NBA Performance Predictor",
     page_icon="🏀",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="auto"  # Collapsible sidebar for mobile
 )
 
 # Global style overrides: dark background, blue-green accents

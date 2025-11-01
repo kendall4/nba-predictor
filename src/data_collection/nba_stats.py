@@ -48,10 +48,47 @@ class NBAStatsCollector:
         
         df = team_stats.get_data_frames()[0]
         
-        # Show the important columns for predictions
-        important_cols = ['TEAM_NAME', 'W', 'L', 'W_PCT', 'OFF_RATING', 'DEF_RATING', 'NET_RATING', 'PACE']
+        # Filter out WNBA teams (only keep NBA teams)
+        nba_team_names = [
+            'Hawks', 'Celtics', 'Nets', 'Hornets', 'Bulls', 'Cavaliers', 'Mavericks', 'Nuggets',
+            'Pistons', 'Warriors', 'Rockets', 'Pacers', 'Clippers', 'Lakers', 'Grizzlies', 'Heat',
+            'Bucks', 'Timberwolves', 'Pelicans', 'Knicks', 'Thunder', 'Magic', '76ers', 'Suns',
+            'Trail Blazers', 'Kings', 'Spurs', 'Raptors', 'Jazz', 'Wizards'
+        ]
         
-        print(f"✅ Got stats for {len(df)} teams\n")
+        # Also filter by TEAM_ID if available (NBA team IDs are 1610612737-1610612766)
+        if 'TEAM_ID' in df.columns:
+            nba_team_ids = list(range(1610612737, 1610612767))
+            df = df[df['TEAM_ID'].isin(nba_team_ids)]
+        
+        # Additional filter by team name keywords to catch any missed teams
+        df = df[df['TEAM_NAME'].str.contains('|'.join(nba_team_names), case=False, na=False)]
+        
+        # Filter out teams with insufficient games (data quality issue)
+        # Teams with < 15 games in early season have unreliable stats
+        if 'GP' in df.columns:
+            min_games = 15
+            initial_count = len(df)
+            df = df[df['GP'] >= min_games]
+            filtered_count = initial_count - len(df)
+            if filtered_count > 0:
+                print(f"⚠️  Filtered out {filtered_count} teams with < {min_games} games (unreliable early-season data)")
+        
+        # Validate data quality - flag outliers
+        if 'DEF_RATING' in df.columns and 'OFF_RATING' in df.columns and 'PACE' in df.columns:
+            outliers = df[
+                (df['DEF_RATING'] > 130) | (df['DEF_RATING'] < 80) |
+                (df['OFF_RATING'] > 130) | (df['OFF_RATING'] < 80) |
+                (df['PACE'] > 110) | (df['PACE'] < 85)
+            ]
+            if len(outliers) > 0:
+                print(f"⚠️  Warning: {len(outliers)} teams have outlier stats (will use defaults in predictions):")
+                print(outliers[['TEAM_NAME', 'DEF_RATING', 'OFF_RATING', 'PACE', 'GP']].to_string())
+        
+        # Show the important columns for predictions
+        important_cols = ['TEAM_NAME', 'W', 'L', 'W_PCT', 'OFF_RATING', 'DEF_RATING', 'NET_RATING', 'PACE', 'GP']
+        
+        print(f"✅ Got stats for {len(df)} NBA teams (filtered)\n")
         print("Top 10 Teams by PACE (possessions per 48 min):")
         print(df[important_cols].sort_values('PACE', ascending=False).head(10))
         

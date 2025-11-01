@@ -10,8 +10,14 @@ class ValueAnalyzer:
     - Find players we predict to BEAT their over/under
     """
     
+    # Cache the builder instance to avoid reloading data every time
+    _builder = None
+    
     def __init__(self):
-        self.builder = MatchupFeatureBuilder(blend_mode="latest")
+        # Reuse builder instance if already created (performance optimization)
+        if ValueAnalyzer._builder is None:
+            ValueAnalyzer._builder = MatchupFeatureBuilder(blend_mode="latest")
+        self.builder = ValueAnalyzer._builder
     
     def analyze_games(self, games_today, odds_lines=None):
         """

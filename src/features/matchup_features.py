@@ -232,13 +232,20 @@ class MatchupFeatureBuilder:
         """
         all_features = []
         
+        # Pre-filter players to only those in today's games (performance optimization)
+        game_teams = set()
+        for game in games_today:
+            game_teams.add(game['home'])
+            game_teams.add(game['away'])
+        players_today = self.players[self.players['TEAM_ABBREVIATION'].isin(game_teams)]
+        
         for game in games_today:
             home = game['home']
             away = game['away']
             
-            # Get all players from both teams
-            home_players = self.players[self.players['TEAM_ABBREVIATION'] == home]
-            away_players = self.players[self.players['TEAM_ABBREVIATION'] == away]
+            # Get all players from both teams (from pre-filtered set)
+            home_players = players_today[players_today['TEAM_ABBREVIATION'] == home]
+            away_players = players_today[players_today['TEAM_ABBREVIATION'] == away]
 
             # Safety: ensure unique players per team (in case of residual duplicates)
             if 'PLAYER_ID' in home_players.columns:
