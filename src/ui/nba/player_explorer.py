@@ -44,7 +44,25 @@ def render(predictions):
             logs = None
     
     if logs is None or len(logs) == 0:
-        st.info("No gamelogs found for 2025-26. Gamelogs are cached after first fetch - try again in a moment.")
+        st.warning("⚠️ No gamelogs found for 2025-26 season.")
+        st.info("💡 **Why this might happen:**\n"
+                "- Season hasn't started yet (will use 2024-25 data as fallback)\n"
+                "- Player name doesn't match NBA API format\n"
+                "- API timeout (try again)\n"
+                "- Player hasn't played any games this season")
+        
+        # Try to show if player exists
+        if selected_player in tracker.players['PLAYER_NAME'].values if 'PLAYER_NAME' in tracker.players.columns else []:
+            st.caption(f"✅ Player found in roster. Trying fallback to 2024-25 season...")
+            try:
+                logs_fallback = tracker.get_player_gamelog(selected_player, season='2024-25')
+                if logs_fallback is not None and len(logs_fallback) > 0:
+                    st.success(f"✅ Found {len(logs_fallback)} games from 2024-25 season")
+                    show_cols = [c for c in ['GAME_DATE','MATCHUP','PTS','REB','AST','FG3M'] if c in logs_fallback.columns]
+                    st.dataframe(logs_fallback[show_cols].head(recent_n), use_container_width=True, hide_index=True)
+                    logs = logs_fallback  # Use fallback for rest of UI
+            except Exception:
+                pass
     else:
         show_cols = [c for c in ['GAME_DATE','MATCHUP','PTS','REB','AST','FG3M'] if c in logs.columns]
         st.subheader("Recent Game Logs")

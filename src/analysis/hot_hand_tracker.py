@@ -81,8 +81,9 @@ class HotHandTracker:
         if use_cache and os.path.exists(cache_path):
             try:
                 df = pd.read_csv(cache_path)
-                if not df.empty:
+                if df is not None and len(df) > 0:
                     return df
+                # If cached file is empty, don't use it - fetch fresh
             except Exception:
                 pass
 
@@ -104,12 +105,16 @@ class HotHandTracker:
                     if season == '2025-26':
                         try:
                             logs_prev = playergamelog.PlayerGameLog(player_id=pid, season='2024-25', season_type_all_star='Regular Season')
-                            df = logs_prev.get_data_frames()[0]
-                            if df is not None and len(df) > 0:
-                                break
+                            df_prev = logs_prev.get_data_frames()[0]
+                            if df_prev is not None and len(df_prev) > 0:
+                                df = df_prev  # Use fallback data
+                                break  # Success with fallback
                         except Exception:
                             pass
-                    return df  # Return empty or fallback
+                    # If still empty after fallback attempt, continue to next attempt or return None
+                    if df is not None and len(df) == 0:
+                        # Don't return empty df - try again or return None
+                        continue
                 
             except Exception as e:
                 error_str = str(e).lower()
@@ -126,12 +131,16 @@ class HotHandTracker:
                     if season == '2025-26':
                         try:
                             logs_prev = playergamelog.PlayerGameLog(player_id=pid, season='2024-25', season_type_all_star='Regular Season')
-                            df = logs_prev.get_data_frames()[0]
-                            if df is not None and len(df) > 0:
-                                break
+                            df_prev = logs_prev.get_data_frames()[0]
+                            if df_prev is not None and len(df_prev) > 0:
+                                df = df_prev  # Use fallback data
+                                break  # Success with fallback
                         except Exception:
                             pass
-                    return None
+                    # If we still don't have data after fallback, return None
+                    if df is None or (df is not None and len(df) == 0):
+                        return None
+                    break  # We got fallback data
                 
                 # For timeouts, quick retry (reduced delays)
                 if is_timeout:
@@ -141,8 +150,8 @@ class HotHandTracker:
                     # For non-timeout errors, give up immediately
                     return None
         
-        # If we got here but df is still None, something went wrong
-        if df is None:
+        # If we got here but df is still None or empty, something went wrong
+        if df is None or len(df) == 0:
             return None
         
         wanted_cols = ['GAME_DATE', 'MATCHUP', 'PTS', 'REB', 'AST', 'FG3M']
@@ -151,10 +160,12 @@ class HotHandTracker:
                 df[c] = np.nan
         df = df.sort_values('GAME_DATE', ascending=False).reset_index(drop=True)
 
-        try:
-            df.to_csv(cache_path, index=False)
-        except Exception:
-            pass
+        # Only cache if we have actual data (don't cache empty dataframes)
+        if len(df) > 0:
+            try:
+                df.to_csv(cache_path, index=False)
+            except Exception:
+                pass
 
         return df
 
