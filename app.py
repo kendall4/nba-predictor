@@ -172,9 +172,38 @@ with tab_nba:
 
     st.markdown("---")
 
+    # Preload all data on app start for faster tab switching
+    @st.cache_resource
+    def preload_matchup_builder():
+        """Preload MatchupFeatureBuilder once (shared across sessions)"""
+        from src.features.matchup_features import MatchupFeatureBuilder
+        return MatchupFeatureBuilder(blend_mode="latest")
+    
+    @st.cache_data(ttl=600)  # Cache injury data for 10 minutes
+    def preload_injury_data():
+        """Preload ESPN injury data"""
+        from src.services.injury_tracker import InjuryTracker
+        import os
+        tracker = InjuryTracker(api_key=os.getenv('ROTOWIRE_API_KEY'))
+        # Force load ESPN injuries by checking a dummy player
+        try:
+            tracker._get_espn_injuries()
+        except:
+            pass
+        return tracker
+    
+    # Preload builder and injury tracker
+    if 'builder_loaded' not in st.session_state:
+        with st.spinner("🔄 Preloading data..."):
+            st.session_state['builder'] = preload_matchup_builder()
+            st.session_state['injury_tracker'] = preload_injury_data()
+            st.session_state['builder_loaded'] = True
+
     # Predictions cache in session
     if 'predictions' not in st.session_state:
         st.session_state['predictions'] = None
+    if 'predictions_raw' not in st.session_state:
+        st.session_state['predictions_raw'] = None  # Store raw predictions before filters
 
     # Controls for predictions
     st.subheader("Predictions Workspace")
@@ -188,17 +217,42 @@ with tab_nba:
         # Show a status message but don't block the UI
         status_placeholder = st.empty()
         status_placeholder.info("🔄 Generating predictions... This may take a moment")
+        
+        # Use preloaded builder if available
+        from src.analysis.value_analyzer import ValueAnalyzer
         analyzer = ValueAnalyzer()
-        predictions = analyzer.analyze_games(games)
+        if 'builder' in st.session_state:
+            # Use preloaded builder (already loaded, faster)
+            analyzer.builder = st.session_state['builder']
+        
+        # Generate ALL predictions first (before filters) - this ensures NOP players are included
+        predictions_raw = analyzer.analyze_games(games)
+        st.session_state['predictions_raw'] = predictions_raw
+        
+        # Debug: Show teams found
+        if len(predictions_raw) > 0:
+            teams_found = sorted(predictions_raw['team'].unique().tolist())
+            status_placeholder.info(f"🔄 Generating predictions... Found players from {len(teams_found)} teams: {', '.join(teams_found)}")
+        
+        # Apply filters
+        predictions = predictions_raw.copy()
         predictions = predictions[predictions['minutes'] >= min_minutes]
         predictions = predictions[predictions['overall_value'] >= min_value]
         
+        # Show debug info about filtering
+        if len(predictions_raw) > 0 and len(predictions) < len(predictions_raw):
+            filtered_out = len(predictions_raw) - len(predictions)
+            status_placeholder.info(f"🔄 Filtered out {filtered_out} players (min_minutes={min_minutes}, min_value={min_value}). Showing {len(predictions)} players.")
+        
         # Filter out injured/out players if enabled
-        # Optimization: Only check top 50 players (where most value plays are)
+        # Use preloaded injury tracker if available
         if filter_injured:
-            from src.services.injury_tracker import InjuryTracker
-            import os
-            injury_tracker = InjuryTracker(api_key=os.getenv('ROTOWIRE_API_KEY'))
+            if 'injury_tracker' in st.session_state:
+                injury_tracker = st.session_state['injury_tracker']
+            else:
+                from src.services.injury_tracker import InjuryTracker
+                import os
+                injury_tracker = InjuryTracker(api_key=os.getenv('ROTOWIRE_API_KEY'))
             
             # Sort first, then only check top players (faster)
             predictions_sorted = predictions.sort_values('overall_value', ascending=False)

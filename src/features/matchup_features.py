@@ -125,8 +125,19 @@ class MatchupFeatureBuilder:
         - Predicted points/rebounds/assists
         """
         
-        # Find player
+        # Find player - try exact match first, then case-insensitive, then fuzzy
         player = self.players[self.players['PLAYER_NAME'] == player_name]
+        if len(player) == 0:
+            # Try case-insensitive match
+            player = self.players[self.players['PLAYER_NAME'].str.lower() == player_name.lower()]
+        if len(player) == 0:
+            # Try fuzzy match (contains)
+            player = self.players[self.players['PLAYER_NAME'].str.contains(player_name, case=False, na=False)]
+        if len(player) == 0:
+            # Last try: match by last name
+            last_name = player_name.split()[-1] if len(player_name.split()) > 0 else player_name
+            player = self.players[self.players['PLAYER_NAME'].str.contains(last_name, case=False, na=False)]
+        
         if len(player) == 0:
             return None
         
