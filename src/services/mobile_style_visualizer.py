@@ -105,42 +105,42 @@ class MobileStyleVisualizer:
             opponent: Optional opponent for H2H
         """
         # Get game log
-            if opponent and time_period == 'H2H':
-                # H2H logic - extract opponent from MATCHUP
-                def extract_opponent(matchup_str):
-                    """Extract opponent abbreviation from MATCHUP string"""
-                    if pd.isna(matchup_str):
-                        return ''
-                    matchup = str(matchup_str).upper()
-                    # Format: "10/22 @ DAL" or "10/22 VS TOR"
-                    parts = matchup.split()
-                    if len(parts) >= 2:
-                        return parts[-1]  # Last part is usually opponent
+        if opponent and time_period == 'H2H':
+            # H2H logic - extract opponent from MATCHUP
+            def extract_opponent(matchup_str):
+                """Extract opponent abbreviation from MATCHUP string"""
+                if pd.isna(matchup_str):
                     return ''
-                
-                current_season = self.hot_hand_tracker.get_player_gamelog(player_name, season='2025-26')
-                prev_season = self.hot_hand_tracker.get_player_gamelog(player_name, season='2024-25')
-                
-                h2h_games = []
-                if current_season is not None and len(current_season) > 0 and 'MATCHUP' in current_season.columns:
-                    current_season['OPP'] = current_season['MATCHUP'].apply(extract_opponent)
-                    h2h_current = current_season[current_season['OPP'] == opponent.upper()].copy()
-                    if len(h2h_current) > 0:
-                        h2h_games.append(h2h_current)
-                
-                if prev_season is not None and len(prev_season) > 0 and 'MATCHUP' in prev_season.columns:
-                    prev_season['OPP'] = prev_season['MATCHUP'].apply(extract_opponent)
-                    h2h_prev = prev_season[prev_season['OPP'] == opponent.upper()].copy()
-                    if len(h2h_prev) > 0:
-                        h2h_games.append(h2h_prev)
-                
-                if not h2h_games:
-                    return None
-                
-                game_log = pd.concat(h2h_games, ignore_index=True) if len(h2h_games) > 1 else h2h_games[0]
-                if 'GAME_DATE' in game_log.columns:
-                    game_log = game_log.sort_values('GAME_DATE', ascending=False)
-                game_log = game_log.head(n_games)
+                matchup = str(matchup_str).upper()
+                # Format: "10/22 @ DAL" or "10/22 VS TOR"
+                parts = matchup.split()
+                if len(parts) >= 2:
+                    return parts[-1]  # Last part is usually opponent
+                return ''
+            
+            current_season = self.hot_hand_tracker.get_player_gamelog(player_name, season='2025-26')
+            prev_season = self.hot_hand_tracker.get_player_gamelog(player_name, season='2024-25')
+            
+            h2h_games = []
+            if current_season is not None and len(current_season) > 0 and 'MATCHUP' in current_season.columns:
+                current_season['OPP'] = current_season['MATCHUP'].apply(extract_opponent)
+                h2h_current = current_season[current_season['OPP'] == opponent.upper()].copy()
+                if len(h2h_current) > 0:
+                    h2h_games.append(h2h_current)
+            
+            if prev_season is not None and len(prev_season) > 0 and 'MATCHUP' in prev_season.columns:
+                prev_season['OPP'] = prev_season['MATCHUP'].apply(extract_opponent)
+                h2h_prev = prev_season[prev_season['OPP'] == opponent.upper()].copy()
+                if len(h2h_prev) > 0:
+                    h2h_games.append(h2h_prev)
+            
+            if not h2h_games:
+                return None
+            
+            game_log = pd.concat(h2h_games, ignore_index=True) if len(h2h_games) > 1 else h2h_games[0]
+            if 'GAME_DATE' in game_log.columns:
+                game_log = game_log.sort_values('GAME_DATE', ascending=False)
+            game_log = game_log.head(n_games)
         else:
             game_log = self.hot_hand_tracker.get_player_gamelog(player_name, season='2025-26')
             if game_log is None or len(game_log) == 0:
