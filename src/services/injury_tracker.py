@@ -117,13 +117,17 @@ class InjuryTracker:
     
     def _parse_espn_status(self, status_text: str) -> str:
         """Parse ESPN status text to standard format"""
-        status_lower = status_text.lower()
-        if 'out' in status_lower or 'doubtful' in status_lower:
+        if pd.isna(status_text) or status_text == '':
+            return 'Unknown'
+        status_lower = str(status_text).lower().strip()
+        if 'out' in status_lower or 'doubtful' in status_lower or 'out indefinitely' in status_lower:
             return 'Out'
         elif 'questionable' in status_lower or 'q' in status_lower:
             return 'Questionable'
-        elif 'probable' in status_lower:
+        elif 'probable' in status_lower or 'prob' in status_lower:
             return 'Healthy'  # Probable = likely playing
+        elif 'day-to-day' in status_lower or 'dtd' in status_lower:
+            return 'Questionable'
         return 'Unknown'
     
     def _parse_espn_table_row(self, row) -> Optional[Dict]:
@@ -192,9 +196,27 @@ class InjuryTracker:
         if df is None or len(df) == 0:
             return None
         
+        # Try exact match first
+        exact_match = df[df['player_name'].str.lower() == player_name.lower()]
+        if len(exact_match) > 0:
+            return exact_match.iloc[0]
+        
+        # Try first and last name match
+        name_parts = player_name.split()
+        if len(name_parts) >= 2:
+            first_name = name_parts[0]
+            last_name = name_parts[-1]
+            match = df[
+                (df['player_name'].str.contains(first_name, case=False, na=False)) &
+                (df['player_name'].str.contains(last_name, case=False, na=False))
+            ]
+            if len(match) > 0:
+                return match.iloc[0]
+        
+        # Fallback: try last name only
         player_match = df[
             df['player_name'].str.contains(player_name, case=False, na=False) |
-            df['player_name'].str.contains(player_name.split()[-1], case=False, na=False)
+            df['player_name'].str.contains(player_name.split()[-1] if len(player_name.split()) > 0 else player_name, case=False, na=False)
         ]
         
         return player_match.iloc[0] if len(player_match) > 0 else None
