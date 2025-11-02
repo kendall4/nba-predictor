@@ -46,6 +46,20 @@ def render(predictions, games):
             # If check fails, assume healthy (but should rarely happen)
             return True
     
+    def filter_injured_players_from_df(df_team):
+        """Filter out injured players from a DataFrame"""
+        if df_team is None or len(df_team) == 0:
+            return df_team
+        
+        healthy_rows = []
+        for _, row in df_team.iterrows():
+            if check_player_healthy(row['player_name']):
+                healthy_rows.append(row)
+        
+        if len(healthy_rows) == 0:
+            return pd.DataFrame()
+        return pd.DataFrame(healthy_rows)
+    
     def filter_injured_players_from_list(player_list):
         """Filter out injured players from a list of player names"""
         healthy_players = []
@@ -59,17 +73,17 @@ def render(predictions, games):
     
     def build_roster_from_confirmed_lineup(df_team, confirmed_starters):
         """
-        Build roster ONLY from confirmed lineup - NO minutes-based fallback
+        Build roster from confirmed lineup if available
         Filters out injured/out players from confirmed lineup
         """
         if not confirmed_starters or len(confirmed_starters) == 0:
-            return None, None, []
+            return None, None, [], False  # Return False to indicate estimated
         
         # Check all confirmed starters for injuries
         healthy_starters, injured_starters = filter_injured_players_from_list(confirmed_starters)
         
         if len(healthy_starters) == 0:
-            return None, None, injured_starters
+            return None, None, injured_starters, False
         
         # Get predictions for healthy confirmed starters
         starters_df = df_team[df_team['player_name'].isin(healthy_starters)].copy()
@@ -109,62 +123,113 @@ def render(predictions, games):
         else:
             bench_display = pd.DataFrame()
         
-        return starters_display, bench_display, injured_starters
+        return starters_display, bench_display, injured_starters, True  # True = confirmed
+    
+    def build_roster_from_predictions(df_team):
+        """
+        Build roster from predictions (minutes-based) when confirmed lineup unavailable
+        Filters out injured players
+        """
+        if df_team is None or len(df_team) == 0:
+            return pd.DataFrame(), pd.DataFrame()
+        
+        # Filter injured players first
+        df_team = filter_injured_players_from_df(df_team)
+        
+        if len(df_team) == 0:
+            return pd.DataFrame(), pd.DataFrame()
+        
+        # Starters: top 5 by minutes
+        starters = df_team.sort_values('minutes', ascending=False).head(5).copy()
+        bench = df_team.sort_values('minutes', ascending=False).iloc[5:].copy()
+        
+        # Build display dataframes
+        if len(starters) > 0:
+            starters_display = starters[['player_name','minutes','pred_points','pred_rebounds','pred_assists']].copy()
+            starters_display.rename(columns={'minutes':'season_minutes'}, inplace=True)
+            starters_display['pred_minutes'] = starters_display['season_minutes'].round(1)
+        else:
+            starters_display = pd.DataFrame()
+        
+        if len(bench) > 0:
+            bench_display = bench[['player_name','minutes','pred_points','pred_rebounds','pred_assists']].copy()
+            bench_display.rename(columns={'minutes':'season_minutes'}, inplace=True)
+            bench_display['pred_minutes'] = (bench_display['season_minutes']*0.9).round(1)
+        else:
+            bench_display = pd.DataFrame()
+        
+        return starters_display, bench_display
 
     colH, colA = st.columns(2)
     with colH:
         st.subheader(f"Home: {home}")
         if nba_home and len(nba_home) > 0:
+            # Try confirmed lineup first
             st.success(f"✅ Confirmed lineup available ({len(nba_home)} starters) - Source: NBA.com (FREE)")
-            sh, bh, injured_home = build_roster_from_confirmed_lineup(team_home, nba_home)
+            sh, bh, injured_home, is_confirmed = build_roster_from_confirmed_lineup(team_home, nba_home)
             
             if sh is None:
-                st.error(f"❌ No confirmed lineup available for {home}. Cannot show inaccurate lineups.")
+                # All confirmed starters are injured, fall back to estimated
+                st.warning(f"⚠️ All confirmed starters are OUT. Showing estimated lineup.")
                 if injured_home:
-                    st.warning(f"⚠️ Confirmed starters who are OUT: {', '.join(injured_home)}")
-            else:
-                if injured_home:
-                    st.warning(f"⚠️ Removed injured starters: {', '.join(injured_home)}")
-                st.markdown("**Starters (Confirmed)**")
-                if len(sh) > 0:
-                    st.data_editor(sh, use_container_width=True, hide_index=True, num_rows="dynamic", key=f"home_starters_{home}_{away}")
-                else:
-                    st.caption("No healthy starters available")
-                st.markdown("**Bench (Healthy Players)**")
-                if len(bh) > 0:
-                    st.data_editor(bh, use_container_width=True, hide_index=True, num_rows="dynamic", key=f"home_bench_{home}_{away}")
-                else:
-                    st.caption("No bench players available")
+                    st.info(f"Injured: {', '.join(injured_home)}")
+                sh, bh = build_roster_from_predictions(team_home)
+                is_confirmed = False
         else:
-            st.error(f"❌ No confirmed lineup available for {home}")
-            st.info("💡 Trying to fetch from NBA.com (free). Rotowire API key (optional) provides backup source.")
+            # No confirmed lineup, use estimated
+            st.info(f"📊 Estimated lineup (based on season minutes)")
+            st.caption("💡 Set ROTOWIRE_API_KEY for confirmed lineups")
+            sh, bh = build_roster_from_predictions(team_home)
+            is_confirmed = False
+            injured_home = []
+        
+        # Display lineup
+        if sh is not None and len(sh) > 0:
+            lineup_label = "**Starters (Confirmed)**" if is_confirmed else "**Starters (Estimated)**"
+            st.markdown(lineup_label)
+            st.data_editor(sh, use_container_width=True, hide_index=True, num_rows="dynamic", key=f"home_starters_{home}_{away}")
+            st.markdown("**Bench (Healthy Players)**")
+            if len(bh) > 0:
+                st.data_editor(bh, use_container_width=True, hide_index=True, num_rows="dynamic", key=f"home_bench_{home}_{away}")
+            else:
+                st.caption("No bench players available")
+        else:
+            st.warning(f"⚠️ No healthy players found for {home}. All may be injured or filtered.")
     
     with colA:
         st.subheader(f"Away: {away}")
         if nba_away and len(nba_away) > 0:
+            # Try confirmed lineup first
             st.success(f"✅ Confirmed lineup available ({len(nba_away)} starters) - Source: NBA.com (FREE)")
-            sa, ba, injured_away = build_roster_from_confirmed_lineup(team_away, nba_away)
+            sa, ba, injured_away, is_confirmed = build_roster_from_confirmed_lineup(team_away, nba_away)
             
             if sa is None:
-                st.error(f"❌ No confirmed lineup available for {away}. Cannot show inaccurate lineups.")
+                # All confirmed starters are injured, fall back to estimated
+                st.warning(f"⚠️ All confirmed starters are OUT. Showing estimated lineup.")
                 if injured_away:
-                    st.warning(f"⚠️ Confirmed starters who are OUT: {', '.join(injured_away)}")
-            else:
-                if injured_away:
-                    st.warning(f"⚠️ Removed injured starters: {', '.join(injured_away)}")
-                st.markdown("**Starters (Confirmed)**")
-                if len(sa) > 0:
-                    st.data_editor(sa, use_container_width=True, hide_index=True, num_rows="dynamic", key=f"away_starters_{home}_{away}")
-                else:
-                    st.caption("No healthy starters available")
-                st.markdown("**Bench (Healthy Players)**")
-                if len(ba) > 0:
-                    st.data_editor(ba, use_container_width=True, hide_index=True, num_rows="dynamic", key=f"away_bench_{home}_{away}")
-                else:
-                    st.caption("No bench players available")
+                    st.info(f"Injured: {', '.join(injured_away)}")
+                sa, ba = build_roster_from_predictions(team_away)
+                is_confirmed = False
         else:
-            st.error(f"❌ No confirmed lineup available for {away}")
-            st.info("💡 Trying to fetch from NBA.com (free). Rotowire API key (optional) provides backup source.")
+            # No confirmed lineup, use estimated
+            st.info(f"📊 Estimated lineup (based on season minutes)")
+            st.caption("💡 Set ROTOWIRE_API_KEY for confirmed lineups")
+            sa, ba = build_roster_from_predictions(team_away)
+            is_confirmed = False
+            injured_away = []
+        
+        # Display lineup
+        if sa is not None and len(sa) > 0:
+            lineup_label = "**Starters (Confirmed)**" if is_confirmed else "**Starters (Estimated)**"
+            st.markdown(lineup_label)
+            st.data_editor(sa, use_container_width=True, hide_index=True, num_rows="dynamic", key=f"away_starters_{home}_{away}")
+            st.markdown("**Bench (Healthy Players)**")
+            if len(ba) > 0:
+                st.data_editor(ba, use_container_width=True, hide_index=True, num_rows="dynamic", key=f"away_bench_{home}_{away}")
+            else:
+                st.caption("No bench players available")
+        else:
+            st.warning(f"⚠️ No healthy players found for {away}. All may be injured or filtered.")
 
     st.markdown("---")
     
@@ -344,6 +409,6 @@ def render(predictions, games):
             st.info("No players available for visualization.")
     
     st.markdown("---")
-    st.caption("⚠️ **Accuracy First**: Lineups from NBA.com (free) or Rotowire API. Injured/out players automatically excluded. Edit minutes as needed.")
+    st.caption("📊 **Lineups**: Confirmed lineups preferred (NBA.com/Rotowire), estimated lineups shown when unavailable. Injured/out players automatically excluded.")
 
 
