@@ -127,18 +127,52 @@ class LineupTracker:
             except:
                 continue
         
-        # Fallback: Try using NBA API boxscore/scoreboard endpoints
-        # NBA API doesn't directly provide lineups, so we'll use a different approach
-        # Try to get from scoreboard and then boxscore for each game
+        # Fallback: Try using NBA API boxscore endpoints for games in progress
+        # Note: Boxscores only available during/after games, not pre-game
+        # But we can get actual starters from START_POSITION field
         try:
             from nba_api.live.nba.endpoints import scoreboard
+            from nba_api.stats.endpoints import boxscoretraditionalv2
+            
             board = scoreboard.ScoreBoard()
             games = board.games.get_dict()
             
-            # For each game, we'd need to get boxscore to see starters
-            # But boxscore might not be available pre-game
-            # So we'll return what we can parse from the HTML
-        except:
+            # Try to get lineups from boxscore for each game that has started
+            for game in games:
+                game_id = game.get('gameId')
+                game_status = game.get('gameStatusText', '').upper()
+                
+                # Only try if game has started or is in progress
+                if not game_id or 'FINAL' not in game_status and 'LIVE' not in game_status and 'IN PROGRESS' not in game_status:
+                    continue
+                
+                try:
+                    # BoxscoreTraditionalV2 has START_POSITION field - perfect for getting starters!
+                    boxscore = boxscoretraditionalv2.BoxScoreTraditionalV2(game_id=game_id)
+                    dfs = boxscore.get_data_frames()
+                    
+                    if len(dfs) > 0:
+                        player_stats = dfs[0]  # PlayerStats dataframe
+                        
+                        # Filter players with START_POSITION (not empty/null) - these are starters
+                        starters = player_stats[
+                            (player_stats['START_POSITION'].notna()) & 
+                            (player_stats['START_POSITION'] != '')
+                        ]
+                        
+                        if len(starters) > 0:
+                            for _, player in starters.iterrows():
+                                lineups.append({
+                                    'game_id': str(game_id),
+                                    'team': player.get('TEAM_ABBREVIATION', ''),
+                                    'player_name': player.get('PLAYER_NAME', ''),
+                                    'position': player.get('START_POSITION', ''),
+                                    'confirmed': True  # Actual game data = confirmed
+                                })
+                except Exception:
+                    continue
+        except Exception as e:
+            # Silent fail - boxscores not available pre-game
             pass
         
         return lineups
