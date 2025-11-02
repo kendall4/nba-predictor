@@ -3,6 +3,7 @@ import pandas as pd
 from src.services.lineup_tracker import LineupTracker
 from src.services.injury_tracker import InjuryTracker
 from src.services.advanced_stats import AdvancedStatsCalculator
+from src.services.player_visualizations import PlayerVisualizer
 import os
 
 def render(predictions, games):
@@ -167,12 +168,13 @@ def render(predictions, games):
 
     st.markdown("---")
     
-    # Advanced Stats Section
-    st.subheader("📊 Advanced Stats & Recent Performance")
-    st.caption("Rebound chances, potential assists, and last 5 games performance")
+    # Advanced Stats & Visualizations Section
+    st.subheader("📊 Advanced Stats & Performance Visualizations")
+    st.caption("Rebound chances, potential assists, last 5 games performance, and interactive charts")
     
-    # Initialize advanced stats calculator
+    # Initialize calculators
     adv_stats = AdvancedStatsCalculator()
+    visualizer = PlayerVisualizer()
     
     # Show advanced stats for displayed players
     with st.expander("View Advanced Stats & Last 5 Games", expanded=False):
@@ -234,6 +236,112 @@ def render(predictions, games):
                     st.info("No games found matching filters or player has no recent games.")
         else:
             st.info("No players available to show advanced stats.")
+    
+    # Performance Visualizations Section
+    with st.expander("📈 Performance Visualizations", expanded=True):
+        all_players_viz = []
+        if len(team_home) > 0:
+            all_players_viz.extend(team_home['player_name'].tolist())
+        if len(team_away) > 0:
+            all_players_viz.extend(team_away['player_name'].tolist())
+        
+        if len(all_players_viz) > 0:
+            viz_col1, viz_col2 = st.columns([2, 1])
+            
+            with viz_col1:
+                selected_player_viz = st.selectbox(
+                    "Select player for visualization", 
+                    options=all_players_viz, 
+                    key="viz_player"
+                )
+            
+            with viz_col2:
+                time_period = st.selectbox(
+                    "Time Period",
+                    options=["Last 1 Game", "Last 5 Games", "Last 10 Games", "Head-to-Head"],
+                    key="time_period"
+                )
+            
+            if selected_player_viz:
+                # Parse time period
+                if time_period == "Last 1 Game":
+                    n_games = 1
+                    opponent = None
+                elif time_period == "Last 5 Games":
+                    n_games = 5
+                    opponent = None
+                elif time_period == "Last 10 Games":
+                    n_games = 10
+                    opponent = None
+                else:  # Head-to-Head
+                    n_games = 5
+                    # Get opponent from current game context
+                    opponent = st.selectbox(
+                        "Select Opponent (H2H)",
+                        options=[away, home] + [g['away'] for g in games] + [g['home'] for g in games],
+                        key="h2h_opponent"
+                    )
+                
+                # Get game log data
+                game_log = visualizer.get_game_log_for_visualization(
+                    selected_player_viz, 
+                    n=n_games, 
+                    opponent=opponent
+                )
+                
+                if game_log is not None and len(game_log) > 0:
+                    # Stat selection for individual charts
+                    st.markdown("### Individual Stat Charts")
+                    stat_options = ['points', 'rebounds', 'assists', 'threes']
+                    selected_stats = st.multiselect(
+                        "Select stats to visualize",
+                        options=stat_options,
+                        default=['points', 'rebounds', 'assists'],
+                        key="selected_stats"
+                    )
+                    
+                    # Create and display charts
+                    if selected_stats:
+                        cols = st.columns(min(len(selected_stats), 2))
+                        for idx, stat in enumerate(selected_stats):
+                            with cols[idx % 2]:
+                                fig = visualizer.create_bar_chart(
+                                    game_log,
+                                    stat,
+                                    selected_player_viz,
+                                    time_period
+                                )
+                                if fig:
+                                    st.plotly_chart(fig, use_container_width=True, key=f"chart_{stat}")
+                    
+                    # Combined stat chart option
+                    st.markdown("### Combined Stats Chart")
+                    show_combined = st.checkbox("Show PTS + REB + AST combined", value=False, key="show_combined")
+                    if show_combined:
+                        fig_combined = visualizer.create_bar_chart(
+                            game_log,
+                            'combined',
+                            selected_player_viz,
+                            time_period
+                        )
+                        if fig_combined:
+                            st.plotly_chart(fig_combined, use_container_width=True, key="chart_combined")
+                    
+                    # Multi-stat comparison chart
+                    st.markdown("### Multi-Stat Comparison")
+                    show_multi = st.checkbox("Show side-by-side comparison", value=True, key="show_multi")
+                    if show_multi:
+                        fig_multi = visualizer.create_multi_stat_comparison(
+                            game_log,
+                            selected_player_viz,
+                            time_period
+                        )
+                        if fig_multi:
+                            st.plotly_chart(fig_multi, use_container_width=True, key="chart_multi")
+                else:
+                    st.warning(f"No game data found for {selected_player_viz} ({time_period})")
+        else:
+            st.info("No players available for visualization.")
     
     st.markdown("---")
     st.caption("⚠️ **Accuracy First**: Lineups from NBA.com (free) or Rotowire API. Injured/out players automatically excluded. Edit minutes as needed.")

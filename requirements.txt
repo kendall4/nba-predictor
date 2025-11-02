@@ -21,6 +21,7 @@ pytz==2024.1
 # Visualization
 matplotlib==3.8.2
 seaborn==0.13.0
+plotly==5.18.0
 
 # Jupyter (for exploration)
 jupyter==1.0.0
