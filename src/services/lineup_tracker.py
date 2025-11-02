@@ -53,12 +53,53 @@ class LineupTracker:
             self.cache[cache_key] = nba_lineups
             return nba_lineups
         
-        # Fallback to Rotowire if API key available
-        if self.rotowire_api_key:
-            rotowire_lineups = self._get_rotowire_lineups(date)
-            if rotowire_lineups is not None and len(rotowire_lineups) > 0:
-                self.cache[cache_key] = rotowire_lineups
-                return rotowire_lineups
+        # Try NBA API boxscore for games in progress (no API key needed)
+        # This gets actual starters from games that have started
+        try:
+            from nba_api.live.nba.endpoints import scoreboard
+            from nba_api.stats.endpoints import boxscoretraditionalv2
+            
+            board = scoreboard.ScoreBoard()
+            games = board.games.get_dict()
+            
+            lineups = []
+            for game in games:
+                game_id = game.get('gameId')
+                game_status = game.get('gameStatusText', '').upper()
+                
+                # Try for games in progress or completed
+                if not game_id:
+                    continue
+                
+                try:
+                    boxscore = boxscoretraditionalv2.BoxScoreTraditionalV2(game_id=game_id)
+                    dfs = boxscore.get_data_frames()
+                    
+                    if len(dfs) > 0:
+                        player_stats = dfs[0]
+                        starters = player_stats[
+                            (player_stats['START_POSITION'].notna()) & 
+                            (player_stats['START_POSITION'] != '')
+                        ]
+                        
+                        if len(starters) > 0:
+                            for _, player in starters.iterrows():
+                                lineups.append({
+                                    'game_id': str(game_id),
+                                    'team': player.get('TEAM_ABBREVIATION', ''),
+                                    'player_name': player.get('PLAYER_NAME', ''),
+                                    'position': player.get('START_POSITION', ''),
+                                    'confirmed': True
+                                })
+                except Exception:
+                    continue
+            
+            if len(lineups) > 0:
+                df = pd.DataFrame(lineups)
+                self.cache[cache_key] = df
+                return df
+        except Exception:
+            pass
         
         return None
     

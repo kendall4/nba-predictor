@@ -4,6 +4,7 @@ from src.services.lineup_tracker import LineupTracker
 from src.services.injury_tracker import InjuryTracker
 from src.services.advanced_stats import AdvancedStatsCalculator
 from src.services.player_visualizations import PlayerVisualizer
+from src.services.mobile_style_visualizer import MobileStyleVisualizer
 import os
 
 def render(predictions, games):
@@ -128,33 +129,45 @@ def render(predictions, games):
     def build_roster_from_predictions(df_team):
         """
         Build roster from predictions (minutes-based) when confirmed lineup unavailable
-        Filters out injured players
+        Filters out injured players and ensures we always show a full lineup
         """
         if df_team is None or len(df_team) == 0:
             return pd.DataFrame(), pd.DataFrame()
         
-        # Filter injured players first
-        df_team = filter_injured_players_from_df(df_team)
+        # Filter injured players first - IMPORTANT: do this before sorting
+        df_team_filtered = filter_injured_players_from_df(df_team)
         
-        if len(df_team) == 0:
+        if len(df_team_filtered) == 0:
+            # If all players filtered out, return empty but log warning
             return pd.DataFrame(), pd.DataFrame()
         
-        # Starters: top 5 by minutes
-        starters = df_team.sort_values('minutes', ascending=False).head(5).copy()
-        bench = df_team.sort_values('minutes', ascending=False).iloc[5:].copy()
+        # Sort by minutes (descending) to get most likely starters
+        df_team_sorted = df_team_filtered.sort_values('minutes', ascending=False).copy()
         
-        # Build display dataframes
-        if len(starters) > 0:
-            starters_display = starters[['player_name','minutes','pred_points','pred_rebounds','pred_assists']].copy()
-            starters_display.rename(columns={'minutes':'season_minutes'}, inplace=True)
-            starters_display['pred_minutes'] = starters_display['season_minutes'].round(1)
+        # Starters: top 5 by minutes (ensure we have at least 5 if available)
+        num_starters = min(5, len(df_team_sorted))
+        starters = df_team_sorted.head(num_starters).copy()
+        
+        # Bench: rest of healthy players
+        bench = df_team_sorted.iloc[num_starters:].copy() if len(df_team_sorted) > num_starters else pd.DataFrame()
+        
+        # Build display dataframes - ensure all required columns exist
+        required_cols = ['player_name', 'minutes', 'pred_points', 'pred_rebounds', 'pred_assists']
+        available_cols = [c for c in required_cols if c in starters.columns]
+        
+        if len(starters) > 0 and len(available_cols) >= 2:  # At least player_name and minutes
+            starters_display = starters[available_cols].copy()
+            if 'minutes' in starters_display.columns:
+                starters_display.rename(columns={'minutes':'season_minutes'}, inplace=True)
+                starters_display['pred_minutes'] = starters_display['season_minutes'].round(1)
         else:
             starters_display = pd.DataFrame()
         
-        if len(bench) > 0:
-            bench_display = bench[['player_name','minutes','pred_points','pred_rebounds','pred_assists']].copy()
-            bench_display.rename(columns={'minutes':'season_minutes'}, inplace=True)
-            bench_display['pred_minutes'] = (bench_display['season_minutes']*0.9).round(1)
+        if len(bench) > 0 and len(available_cols) >= 2:
+            bench_display = bench[available_cols].copy()
+            if 'minutes' in bench_display.columns:
+                bench_display.rename(columns={'minutes':'season_minutes'}, inplace=True)
+                bench_display['pred_minutes'] = (bench_display['season_minutes']*0.9).round(1)
         else:
             bench_display = pd.DataFrame()
         
@@ -178,7 +191,7 @@ def render(predictions, games):
         else:
             # No confirmed lineup, use estimated
             st.info(f"📊 Estimated lineup (based on season minutes)")
-            st.caption("💡 Set ROTOWIRE_API_KEY for confirmed lineups")
+            st.caption("💡 Lineups are estimated based on season minutes (filtered for injuries)")
             sh, bh = build_roster_from_predictions(team_home)
             is_confirmed = False
             injured_home = []
@@ -213,7 +226,7 @@ def render(predictions, games):
         else:
             # No confirmed lineup, use estimated
             st.info(f"📊 Estimated lineup (based on season minutes)")
-            st.caption("💡 Set ROTOWIRE_API_KEY for confirmed lineups")
+            st.caption("💡 Lineups are estimated based on season minutes (filtered for injuries)")
             sa, ba = build_roster_from_predictions(team_away)
             is_confirmed = False
             injured_away = []
@@ -240,6 +253,7 @@ def render(predictions, games):
     # Initialize calculators
     adv_stats = AdvancedStatsCalculator()
     visualizer = PlayerVisualizer()
+    mobile_viz = MobileStyleVisualizer()
     
     # Show advanced stats for displayed players
     with st.expander("View Advanced Stats & Last 5 Games", expanded=False):
@@ -302,8 +316,8 @@ def render(predictions, games):
         else:
             st.info("No players available to show advanced stats.")
     
-    # Performance Visualizations Section
-    with st.expander("📈 Performance Visualizations", expanded=True):
+    # Mobile-Style Performance Visualizations
+    with st.expander("📈 Performance Visualizations (Mobile Style)", expanded=True):
         all_players_viz = []
         if len(team_home) > 0:
             all_players_viz.extend(team_home['player_name'].tolist())
@@ -347,64 +361,100 @@ def render(predictions, games):
                         key="h2h_opponent"
                     )
                 
-                # Get game log data
-                game_log = visualizer.get_game_log_for_visualization(
-                    selected_player_viz, 
-                    n=n_games, 
-                    opponent=opponent
+                # Stat category selection (matching mobile app)
+                stat_categories = {
+                    'PTS': ('PTS', 'Points'),
+                    'AST': ('AST', 'Assists'),
+                    'REB': ('REB', 'Rebounds'),
+                    'FG3M': ('FG3M', '3-Pointers Made'),
+                    'PTS+REB+AST': (None, 'PTS + REB + AST')
+                }
+                selected_stat_key = st.selectbox(
+                    "Stat Category",
+                    options=list(stat_categories.keys()),
+                    key="stat_category"
                 )
                 
-                if game_log is not None and len(game_log) > 0:
-                    # Stat selection for individual charts
-                    st.markdown("### Individual Stat Charts")
-                    stat_options = ['points', 'rebounds', 'assists', 'threes']
-                    selected_stats = st.multiselect(
-                        "Select stats to visualize",
-                        options=stat_options,
-                        default=['points', 'rebounds', 'assists'],
-                        key="selected_stats"
+                stat_col, stat_label = stat_categories[selected_stat_key]
+                
+                # Over/under line input
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    over_under_line = st.number_input(
+                        "Over/Under Line",
+                        min_value=0.0,
+                        value=20.0,
+                        step=0.5,
+                        key="over_under_line"
                     )
-                    
-                    # Create and display charts
-                    if selected_stats:
-                        cols = st.columns(min(len(selected_stats), 2))
-                        for idx, stat in enumerate(selected_stats):
-                            with cols[idx % 2]:
-                                fig = visualizer.create_bar_chart(
-                                    game_log,
-                                    stat,
-                                    selected_player_viz,
-                                    time_period
-                                )
-                                if fig:
-                                    st.plotly_chart(fig, use_container_width=True, key=f"chart_{stat}")
-                    
-                    # Combined stat chart option
-                    st.markdown("### Combined Stats Chart")
-                    show_combined = st.checkbox("Show PTS + REB + AST combined", value=False, key="show_combined")
-                    if show_combined:
-                        fig_combined = visualizer.create_bar_chart(
-                            game_log,
-                            'combined',
-                            selected_player_viz,
-                            time_period
-                        )
-                        if fig_combined:
-                            st.plotly_chart(fig_combined, use_container_width=True, key="chart_combined")
-                    
-                    # Multi-stat comparison chart
-                    st.markdown("### Multi-Stat Comparison")
-                    show_multi = st.checkbox("Show side-by-side comparison", value=True, key="show_multi")
-                    if show_multi:
-                        fig_multi = visualizer.create_multi_stat_comparison(
-                            game_log,
-                            selected_player_viz,
-                            time_period
-                        )
-                        if fig_multi:
-                            st.plotly_chart(fig_multi, use_container_width=True, key="chart_multi")
+                with col2:
+                    # Get suggested line based on average
+                    summary = mobile_viz.get_stat_summary(selected_player_viz, stat_col if stat_col else 'PTS', n_games=5)
+                    suggested_line = summary['average'] if summary else 20.0
+                    st.caption(f"Avg: {suggested_line:.1f}")
+                
+                # Show percentage statistics
+                periods = {'H2H': 5, 'L5': 5, 'L10': 10, 'L20': 20, '2025': 100}
+                pct_stats = mobile_viz.get_percentage_stats(
+                    selected_player_viz, 
+                    stat_col if stat_col else 'PTS',
+                    over_under_line,
+                    periods
+                )
+                
+                st.markdown("### % Statistics")
+                pct_cols = st.columns(len(periods))
+                for idx, (period, pct) in enumerate(pct_stats.items()):
+                    with pct_cols[idx]:
+                        st.metric(period, f"{pct:.0f}%")
+                
+                # Show average and median
+                summary = mobile_viz.get_stat_summary(
+                    selected_player_viz, 
+                    stat_col if stat_col else 'PTS',
+                    n_games=5
+                )
+                avg_col, median_col = st.columns(2)
+                with avg_col:
+                    st.metric("Average", f"{summary['average']:.1f}")
+                with median_col:
+                    st.metric("Median", f"{summary['median']:.0f}")
+                
+                # Show chart based on selected time period
+                if time_period == "Head-to-Head":
+                    opponent = st.selectbox(
+                        "Select Opponent (H2H)",
+                        options=[away, home],
+                        key=f"h2h_opp_{selected_player_viz}"
+                    )
+                    n_games = 5
+                    fig = mobile_viz.create_mobile_style_chart(
+                        selected_player_viz,
+                        stat_col if stat_col else 'PTS',
+                        stat_label,
+                        over_under_line,
+                        'H2H',
+                        n_games,
+                        opponent
+                    )
                 else:
-                    st.warning(f"No game data found for {selected_player_viz} ({time_period})")
+                    n_games_map = {'Last 1 Game': 1, 'Last 5 Games': 5, 'Last 10 Games': 10}
+                    n_games = n_games_map.get(time_period, 5)
+                    period_label = {'Last 1 Game': 'L1', 'Last 5 Games': 'L5', 'Last 10 Games': 'L10'}.get(time_period, 'L5')
+                    fig = mobile_viz.create_mobile_style_chart(
+                        selected_player_viz,
+                        stat_col if stat_col else 'PTS',
+                        stat_label,
+                        over_under_line,
+                        period_label,
+                        n_games,
+                        None
+                    )
+                
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True, key="mobile_chart")
+                else:
+                    st.info(f"No data available for {selected_player_viz}")
         else:
             st.info("No players available for visualization.")
     
