@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from src.services.lineup_tracker import LineupTracker
 from src.services.injury_tracker import InjuryTracker
+from src.services.advanced_stats import AdvancedStatsCalculator
 import os
 
 def render(predictions, games):
@@ -30,10 +31,10 @@ def render(predictions, games):
     else:
         injury_tracker = InjuryTracker(api_key=os.getenv('ROTOWIRE_API_KEY'))
     
-    # Get confirmed lineups from Rotowire (REQUIRED - no fallback)
+    # Get confirmed lineups (tries NBA.com FREE first, then Rotowire if API key available)
     lineup_tracker = LineupTracker()
-    rotowire_home = lineup_tracker.get_team_lineup(home)
-    rotowire_away = lineup_tracker.get_team_lineup(away)
+    nba_home = lineup_tracker.get_team_lineup(home)
+    nba_away = lineup_tracker.get_team_lineup(away)
     
     def check_player_healthy(player_name):
         """Check if player is healthy (not Out)"""
@@ -112,9 +113,9 @@ def render(predictions, games):
     colH, colA = st.columns(2)
     with colH:
         st.subheader(f"Home: {home}")
-        if rotowire_home and len(rotowire_home) > 0:
-            st.success(f"✅ Confirmed lineup available ({len(rotowire_home)} starters)")
-            sh, bh, injured_home = build_roster_from_confirmed_lineup(team_home, rotowire_home)
+        if nba_home and len(nba_home) > 0:
+            st.success(f"✅ Confirmed lineup available ({len(nba_home)} starters) - Source: NBA.com (FREE)")
+            sh, bh, injured_home = build_roster_from_confirmed_lineup(team_home, nba_home)
             
             if sh is None:
                 st.error(f"❌ No confirmed lineup available for {home}. Cannot show inaccurate lineups.")
@@ -135,13 +136,13 @@ def render(predictions, games):
                     st.caption("No bench players available")
         else:
             st.error(f"❌ No confirmed lineup available for {home}")
-            st.info("💡 Set ROTOWIRE_API_KEY to get confirmed lineups. We don't show estimated lineups to ensure accuracy.")
+            st.info("💡 Trying to fetch from NBA.com (free). Rotowire API key (optional) provides backup source.")
     
     with colA:
         st.subheader(f"Away: {away}")
-        if rotowire_away and len(rotowire_away) > 0:
-            st.success(f"✅ Confirmed lineup available ({len(rotowire_away)} starters)")
-            sa, ba, injured_away = build_roster_from_confirmed_lineup(team_away, rotowire_away)
+        if nba_away and len(nba_away) > 0:
+            st.success(f"✅ Confirmed lineup available ({len(nba_away)} starters) - Source: NBA.com (FREE)")
+            sa, ba, injured_away = build_roster_from_confirmed_lineup(team_away, nba_away)
             
             if sa is None:
                 st.error(f"❌ No confirmed lineup available for {away}. Cannot show inaccurate lineups.")
@@ -162,9 +163,79 @@ def render(predictions, games):
                     st.caption("No bench players available")
         else:
             st.error(f"❌ No confirmed lineup available for {away}")
-            st.info("💡 Set ROTOWIRE_API_KEY to get confirmed lineups. We don't show estimated lineups to ensure accuracy.")
+            st.info("💡 Trying to fetch from NBA.com (free). Rotowire API key (optional) provides backup source.")
 
     st.markdown("---")
-    st.caption("⚠️ **Accuracy First**: Only confirmed lineups shown. Injured/out players automatically excluded. Edit minutes as needed.")
+    
+    # Advanced Stats Section
+    st.subheader("📊 Advanced Stats & Recent Performance")
+    st.caption("Rebound chances, potential assists, and last 5 games performance")
+    
+    # Initialize advanced stats calculator
+    adv_stats = AdvancedStatsCalculator()
+    
+    # Show advanced stats for displayed players
+    with st.expander("View Advanced Stats & Last 5 Games", expanded=False):
+        all_players = []
+        if len(team_home) > 0:
+            all_players.extend(team_home['player_name'].tolist())
+        if len(team_away) > 0:
+            all_players.extend(team_away['player_name'].tolist())
+        
+        if len(all_players) > 0:
+            selected_player = st.selectbox("Select player for advanced stats", options=all_players, key="adv_stats_player")
+            
+            if selected_player:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Rebound Chances (Last 5 Games)**")
+                    reb_chances = adv_stats.calculate_rebound_chances_from_games(selected_player, n=5)
+                    if reb_chances:
+                        st.metric("Avg Rebound Chances/Game", f"{reb_chances['avg_rebound_chances']:.1f}")
+                        st.metric("Avg Actual Rebounds", f"{reb_chances['avg_rebounds']:.1f}")
+                        st.metric("Conversion Rate", f"{reb_chances['rebound_chance_rate']:.1%}")
+                
+                with col2:
+                    st.markdown("**Potential Assists (Last 5 Games)**")
+                    pot_assists = adv_stats.calculate_potential_assists_from_games(selected_player, n=5)
+                    if pot_assists:
+                        st.metric("Avg Potential Assists/Game", f"{pot_assists['avg_potential_assists']:.1f}")
+                        st.metric("Avg Actual Assists", f"{pot_assists['avg_assists']:.1f}")
+                        st.metric("Conversion Rate", f"{pot_assists['conversion_rate']:.1%}")
+                
+                # Last 5 games with filters
+                st.markdown("**Last 5 Games Performance**")
+                
+                filter_col1, filter_col2, filter_col3 = st.columns(3)
+                with filter_col1:
+                    min_pts = st.number_input("Min Points", min_value=0, value=0, step=1, key="filter_min_pts")
+                with filter_col2:
+                    min_reb = st.number_input("Min Rebounds", min_value=0, value=0, step=1, key="filter_min_reb")
+                with filter_col3:
+                    min_ast = st.number_input("Min Assists", min_value=0, value=0, step=1, key="filter_min_ast")
+                
+                filters = {}
+                if min_pts > 0:
+                    filters['min_points'] = min_pts
+                if min_reb > 0:
+                    filters['min_rebounds'] = min_reb
+                if min_ast > 0:
+                    filters['min_assists'] = min_ast
+                
+                last_n_games = adv_stats.get_last_n_games_stats(selected_player, n=5, filters=filters if filters else None)
+                
+                if last_n_games is not None and len(last_n_games) > 0:
+                    display_cols = ['GAME_DATE', 'MATCHUP', 'PTS', 'REB', 'AST', 'MIN']
+                    available_cols = [c for c in display_cols if c in last_n_games.columns]
+                    st.dataframe(last_n_games[available_cols], use_container_width=True, hide_index=True)
+                    st.caption(f"Showing {len(last_n_games)} games matching filters")
+                else:
+                    st.info("No games found matching filters or player has no recent games.")
+        else:
+            st.info("No players available to show advanced stats.")
+    
+    st.markdown("---")
+    st.caption("⚠️ **Accuracy First**: Lineups from NBA.com (free) or Rotowire API. Injured/out players automatically excluded. Edit minutes as needed.")
 
 
