@@ -16,6 +16,12 @@ def render(predictions, games):
     st.header("⚡ EV+")
     st.caption("Browse all bets with EV, Implied Probability, and Edge calculations")
     
+    # Initialize session state for bets
+    if 'ev_plus_bets' not in st.session_state:
+        st.session_state['ev_plus_bets'] = None
+    if 'ev_plus_stat' not in st.session_state:
+        st.session_state['ev_plus_stat'] = 'points'
+    
     # Check for API key
     api_key = None
     try:
@@ -39,7 +45,7 @@ def render(predictions, games):
     # Filters
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        stat_filter = st.selectbox("Stat", options=["points", "rebounds", "assists"], index=0, key="ev_plus_stat")
+        stat_filter = st.selectbox("Stat", options=["points", "rebounds", "assists"], index=0, key="ev_plus_stat_filter")
     with col2:
         only_ev_plus = st.checkbox("Show only EV+ bets", value=False, help="Filter to only positive EV bets", key="ev_plus_only_positive")
         min_ev = st.slider("Min EV (if filtering)", 0.0, 0.5, 0.05, 0.01, help="Minimum Expected Value", key="ev_plus_min_ev") if only_ev_plus else None
@@ -53,7 +59,12 @@ def render(predictions, games):
     generator = BetGenerator(odds_api_key=api_key)
     optimizer = AltLineOptimizer()
     
-    if st.button("🔍 Find EV+ Bets", type="primary", use_container_width=True, key="ev_plus_find_bets"):
+    # Check if stat changed - clear cached bets
+    if stat_filter != st.session_state.get('ev_plus_stat'):
+        st.session_state['ev_plus_bets'] = None
+        st.session_state['ev_plus_stat'] = stat_filter
+    
+    if st.button("🔍 Find EV+ Bets", type="primary", use_container_width=True, key="ev_plus_find_bets") or st.session_state['ev_plus_bets'] is None:
         with st.spinner("Analyzing odds and calculating EV..."):
             try:
                 # Get all bets for this stat (include all EV values)
@@ -68,135 +79,153 @@ def render(predictions, games):
                     st.warning("No odds data available or no matching players found.")
                     st.info("💡 Try generating predictions first, or check if there are games today.")
                     st.info("💡 Make sure ODDS_API_KEY is set and odds are available for today's games.")
+                    st.session_state['ev_plus_bets'] = None
                     return
+                
+                # Store in session state
+                st.session_state['ev_plus_bets'] = bets_df
+                st.session_state['ev_plus_stat'] = stat_filter
             except Exception as e:
                 st.error(f"Error fetching odds: {e}")
                 st.info("💡 Check your ODDS_API_KEY and try again.")
+                import traceback
+                st.code(traceback.format_exc())
+                st.session_state['ev_plus_bets'] = None
                 return
+    
+    # Apply filters to stored bets
+    if st.session_state['ev_plus_bets'] is not None and len(st.session_state['ev_plus_bets']) > 0:
+        # Use cached bets if stat matches
+        if st.session_state.get('ev_plus_stat') == stat_filter:
+            bets_df = st.session_state['ev_plus_bets']
+        else:
+            # Need to regenerate for new stat
+            st.info("Stat changed - click 'Find EV+ Bets' to refresh")
+            return
+        
+        # Apply filters
+        filtered_bets = bets_df.copy()
+        
+        # Filter to EV+ only if checkbox is checked
+        if only_ev_plus and min_ev is not None:
+            filtered_bets = filtered_bets[filtered_bets['ev'] >= min_ev]
+        
+        # Filter by bet type (mainline/longshot)
+        if show_mainline_only:
+            filtered_bets = filtered_bets[filtered_bets['is_mainline']]
+        if show_longshot_only:
+            filtered_bets = filtered_bets[filtered_bets['is_longshot']]
+        
+        if len(filtered_bets) == 0:
+            st.warning("No bets found matching filters.")
+            st.info("💡 Adjust filters or try a different stat.")
+            return
+        
+        # Rename for clarity
+        ev_plus_bets = filtered_bets
+        
+        # Sort
+        if sort_by == "EV (highest)":
+            ev_plus_bets = ev_plus_bets.sort_values('ev', ascending=False)
+        elif sort_by == "EV (lowest)":
+            ev_plus_bets = ev_plus_bets.sort_values('ev', ascending=True)
+        elif sort_by == "Odds (highest)":
+            ev_plus_bets = ev_plus_bets.sort_values('odds', ascending=False)
+        elif sort_by == "Odds (lowest)":
+            ev_plus_bets = ev_plus_bets.sort_values('odds', ascending=True)
+        else:
+            ev_plus_bets = ev_plus_bets.sort_values('line', ascending=True)
+        
+        ev_positive_count = (ev_plus_bets['ev'] > 0).sum()
+        if only_ev_plus:
+            st.success(f"✅ Found {len(ev_plus_bets)} EV+ bets (EV >= {min_ev:.1%})")
+        else:
+            st.success(f"✅ Found {len(ev_plus_bets)} bets ({ev_positive_count} EV+)")
             
-            # Apply filters
-            filtered_bets = bets_df.copy()
+        # Display bets in card format
+        for idx, bet in ev_plus_bets.iterrows():
+            # Color code by EV
+            ev_icon = "🔥" if bet['ev'] > 0.1 else "✅" if bet['ev'] > 0.05 else "💰" if bet['ev'] > 0 else "⚠️" if bet['ev'] > -0.05 else "❌"
+            ev_color = bet['ev'] > 0
             
-            # Filter to EV+ only if checkbox is checked
-            if only_ev_plus and min_ev is not None:
-                filtered_bets = filtered_bets[filtered_bets['ev'] >= min_ev]
-            
-            # Filter by bet type (mainline/longshot)
-            if show_mainline_only:
-                filtered_bets = filtered_bets[filtered_bets['is_mainline']]
-            if show_longshot_only:
-                filtered_bets = filtered_bets[filtered_bets['is_longshot']]
-            
-            if len(filtered_bets) == 0:
-                st.warning("No bets found matching filters.")
-                st.info("💡 Adjust filters or try a different stat.")
-                return
-            
-            # Rename for clarity
-            ev_plus_bets = filtered_bets
-            
-            # Sort
-            if sort_by == "EV (highest)":
-                ev_plus_bets = ev_plus_bets.sort_values('ev', ascending=False)
-            elif sort_by == "EV (lowest)":
-                ev_plus_bets = ev_plus_bets.sort_values('ev', ascending=True)
-            elif sort_by == "Odds (highest)":
-                ev_plus_bets = ev_plus_bets.sort_values('odds', ascending=False)
-            elif sort_by == "Odds (lowest)":
-                ev_plus_bets = ev_plus_bets.sort_values('odds', ascending=True)
-            else:
-                ev_plus_bets = ev_plus_bets.sort_values('line', ascending=True)
-            
-            ev_positive_count = (ev_plus_bets['ev'] > 0).sum()
-            if only_ev_plus:
-                st.success(f"✅ Found {len(ev_plus_bets)} EV+ bets (EV >= {min_ev:.1%})")
-            else:
-                st.success(f"✅ Found {len(ev_plus_bets)} bets ({ev_positive_count} EV+)")
-            
-            # Display bets in card format
-            for idx, bet in ev_plus_bets.iterrows():
-                # Color code by EV
-                ev_icon = "🔥" if bet['ev'] > 0.1 else "✅" if bet['ev'] > 0.05 else "💰" if bet['ev'] > 0 else "⚠️" if bet['ev'] > -0.05 else "❌"
-                ev_color = bet['ev'] > 0
+            with st.expander(
+                f"{ev_icon} {bet['player']} {bet['direction']} {bet['line']} {bet['stat'].capitalize()} "
+                f"({bet['odds']:+d}) - EV: {bet['ev']:+.1%}",
+                expanded=idx < 3
+            ):
+                col1, col2, col3, col4 = st.columns(4)
                 
-                with st.expander(
-                    f"{ev_icon} {bet['player']} {bet['direction']} {bet['line']} {bet['stat'].capitalize()} "
-                    f"({bet['odds']:+d}) - EV: {bet['ev']:+.1%}",
-                    expanded=idx < 3
-                ):
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    with col1:
-                        st.metric("Odds", f"{bet['odds']:+d}")
-                        st.caption(f"IP: {implied_prob_to_percent(bet['odds'])}")
-                    
-                    with col2:
-                        st.metric("Model IP", f"{bet['probability']:.1%}")
-                        fv_str = f"+{bet['fv_odds']}" if bet['fv_odds'] > 0 else str(bet['fv_odds'])
-                        st.caption(f"FV: {fv_str}")
-                    
-                    with col3:
-                        st.metric("EV", f"{bet['ev']:+.1%}")
-                        st.caption(f"Units: {bet['units']:.2f}u")
-                    
-                    with col4:
-                        st.metric("Prediction", f"{bet['prediction']:.1f}")
-                        st.caption(f"Book: {bet['book'].upper()}")
-                    
-                    # Edge calculation
-                    model_prob = bet['probability']
-                    implied_prob = american_to_implied_prob(bet['odds'])
-                    edge = model_prob - implied_prob
-                    
-                    if edge > 0.1:
-                        st.success(f"🔥 Strong Edge: {edge:.1%} (Model says {model_prob:.1%}, Book says {implied_prob:.1%})")
-                    elif edge > 0.05:
-                        st.info(f"✅ Good Edge: {edge:.1%}")
-                    else:
-                        st.caption(f"Edge: {edge:+.1%}")
-            
-            # Summary table
-            st.markdown("---")
-            st.subheader("📊 EV+ Summary")
-            summary_df = ev_plus_bets[[
-                'player', 'stat', 'direction', 'line', 'odds', 
-                'probability', 'ev', 'units', 'book'
-            ]].copy()
-            summary_df.columns = [
-                'Player', 'Stat', 'Direction', 'Line', 'Odds',
-                'Model IP', 'EV', 'Units', 'Book'
-            ]
-            # Add Implied Prob column and Edge
-            summary_df['Implied IP'] = summary_df['Odds'].apply(implied_prob_to_percent)
-            # Calculate Edge: Model IP - Implied IP
-            model_ip_decimal = ev_plus_bets['probability'].values
-            implied_ip_decimal = ev_plus_bets['odds'].apply(american_to_implied_prob).values
-            summary_df['Edge'] = (model_ip_decimal - implied_ip_decimal)
-            summary_df['Edge'] = summary_df['Edge'].apply(lambda x: f"{x:+.1%}")
-            summary_df = summary_df[['Player', 'Stat', 'Direction', 'Line', 'Odds', 'Implied IP', 'Model IP', 'Edge', 'EV', 'Units', 'Book']]
-            st.dataframe(summary_df, use_container_width=True, hide_index=True)
-            
-            # Stats summary
-            ev_positive = (ev_plus_bets['ev'] > 0).sum()
-            ev_strong = (ev_plus_bets['ev'] > 0.1).sum()
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Bets", len(ev_plus_bets))
-            with col2:
-                st.metric("EV+ Bets", ev_positive, f"{ev_positive/len(ev_plus_bets)*100:.0f}%")
-            with col3:
-                st.metric("Strong EV+ (10%+)", ev_strong)
-            
-            # Download CSV
-            csv = ev_plus_bets.to_csv(index=False)
-            st.download_button(
-                "📥 Download EV+ Bets (CSV)",
-                csv,
-                f"ev_plus_{stat_filter}_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
-                "text/csv",
-                use_container_width=True,
-                key="ev_plus_download_csv"
-            )
+                with col1:
+                    st.metric("Odds", f"{bet['odds']:+d}")
+                    st.caption(f"IP: {implied_prob_to_percent(bet['odds'])}")
+                
+                with col2:
+                    st.metric("Model IP", f"{bet['probability']:.1%}")
+                    fv_str = f"+{bet['fv_odds']}" if bet['fv_odds'] > 0 else str(bet['fv_odds'])
+                    st.caption(f"FV: {fv_str}")
+                
+                with col3:
+                    st.metric("EV", f"{bet['ev']:+.1%}")
+                    st.caption(f"Units: {bet['units']:.2f}u")
+                
+                with col4:
+                    st.metric("Prediction", f"{bet['prediction']:.1f}")
+                    st.caption(f"Book: {bet['book'].upper()}")
+                
+                # Edge calculation
+                model_prob = bet['probability']
+                implied_prob = american_to_implied_prob(bet['odds'])
+                edge = model_prob - implied_prob
+                
+                if edge > 0.1:
+                    st.success(f"🔥 Strong Edge: {edge:.1%} (Model says {model_prob:.1%}, Book says {implied_prob:.1%})")
+                elif edge > 0.05:
+                    st.info(f"✅ Good Edge: {edge:.1%}")
+                else:
+                    st.caption(f"Edge: {edge:+.1%}")
+        
+        # Summary table
+        st.markdown("---")
+        st.subheader("📊 EV+ Summary")
+        summary_df = ev_plus_bets[[
+            'player', 'stat', 'direction', 'line', 'odds', 
+            'probability', 'ev', 'units', 'book'
+        ]].copy()
+        summary_df.columns = [
+            'Player', 'Stat', 'Direction', 'Line', 'Odds',
+            'Model IP', 'EV', 'Units', 'Book'
+        ]
+        # Add Implied Prob column and Edge
+        summary_df['Implied IP'] = summary_df['Odds'].apply(implied_prob_to_percent)
+        # Calculate Edge: Model IP - Implied IP
+        model_ip_decimal = ev_plus_bets['probability'].values
+        implied_ip_decimal = ev_plus_bets['odds'].apply(american_to_implied_prob).values
+        summary_df['Edge'] = (model_ip_decimal - implied_ip_decimal)
+        summary_df['Edge'] = summary_df['Edge'].apply(lambda x: f"{x:+.1%}")
+        summary_df = summary_df[['Player', 'Stat', 'Direction', 'Line', 'Odds', 'Implied IP', 'Model IP', 'Edge', 'EV', 'Units', 'Book']]
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        
+        # Stats summary
+        ev_positive = (ev_plus_bets['ev'] > 0).sum()
+        ev_strong = (ev_plus_bets['ev'] > 0.1).sum()
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Bets", len(ev_plus_bets))
+        with col2:
+            st.metric("EV+ Bets", ev_positive, f"{ev_positive/len(ev_plus_bets)*100:.0f}%")
+        with col3:
+            st.metric("Strong EV+ (10%+)", ev_strong)
+        
+        # Download CSV
+        csv = ev_plus_bets.to_csv(index=False)
+        st.download_button(
+            "📥 Download EV+ Bets (CSV)",
+            csv,
+            f"ev_plus_{stat_filter}_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+            "text/csv",
+            use_container_width=True,
+            key="ev_plus_download_csv"
+        )
     
     # Show info about EV+
     with st.expander("ℹ️ About EV+"):

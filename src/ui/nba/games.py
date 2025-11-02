@@ -58,9 +58,9 @@ def render(predictions, games):
             st.info("📊 Using estimated lineup (minutes-based)")
         sh, bh = build_roster(team_home, rotowire_starters=rotowire_home)
         st.markdown("**Starters**")
-        st.data_editor(sh, use_container_width=True, hide_index=True, num_rows="dynamic")
+        st.data_editor(sh, use_container_width=True, hide_index=True, num_rows="dynamic", key=f"home_starters_{home}_{away}")
         st.markdown("**Bench**")
-        st.data_editor(bh, use_container_width=True, hide_index=True, num_rows="dynamic")
+        st.data_editor(bh, use_container_width=True, hide_index=True, num_rows="dynamic", key=f"home_bench_{home}_{away}")
     with colA:
         st.subheader(f"Away: {away}")
         if rotowire_away:
@@ -69,9 +69,9 @@ def render(predictions, games):
             st.info("📊 Using estimated lineup (minutes-based)")
         sa, ba = build_roster(team_away, rotowire_starters=rotowire_away)
         st.markdown("**Starters**")
-        st.data_editor(sa, use_container_width=True, hide_index=True, num_rows="dynamic")
+        st.data_editor(sa, use_container_width=True, hide_index=True, num_rows="dynamic", key=f"away_starters_{home}_{away}")
         st.markdown("**Bench**")
-        st.data_editor(ba, use_container_width=True, hide_index=True, num_rows="dynamic")
+        st.data_editor(ba, use_container_width=True, hide_index=True, num_rows="dynamic", key=f"away_bench_{home}_{away}")
 
     st.markdown("---")
     st.caption("Predicted minutes default to season minutes (bench scaled). Edit as needed; can feed into projections next.")
