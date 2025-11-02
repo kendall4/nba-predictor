@@ -5,6 +5,11 @@ from src.analysis.value_analyzer import ValueAnalyzer
 from nba_api.live.nba.endpoints import scoreboard
 from datetime import datetime
 from src.analysis.hot_hand_tracker import HotHandTracker
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file (if it exists)
+load_dotenv()
 
 # Suppress verbose urllib3 timeout warnings from NBA API
 import logging
