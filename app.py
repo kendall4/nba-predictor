@@ -126,19 +126,86 @@ with st.sidebar:
 # Get today's games
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_todays_games():
-    """Get today's games with timeout handling"""
+    """Get today's games with timeout handling, times converted to CST"""
+    from pytz import timezone
+    import pytz
+    
     max_retries = 1
     for attempt in range(max_retries + 1):
         try:
             board = scoreboard.ScoreBoard()
             games = board.games.get_dict()
             
+            # Timezone conversion: NBA API returns ET, convert to CST
+            et_tz = timezone('US/Eastern')
+            cst_tz = timezone('US/Central')
+            
             game_list = []
             for game in games:
+                # Get game time if available
+                game_time_str = None
+                if 'gameDateTimeUTC' in game:
+                    try:
+                        # Parse UTC time and convert to CST
+                        from datetime import datetime
+                        utc_time = datetime.fromisoformat(game['gameDateTimeUTC'].replace('Z', '+00:00'))
+                        # Convert UTC -> ET -> CST (or direct UTC -> CST)
+                        et_time = utc_time.astimezone(et_tz)
+                        cst_time = et_time.astimezone(cst_tz)
+                        # Format as "7:30 PM CST" (cross-platform safe)
+                        hour = cst_time.hour
+                        if hour == 0:
+                            hour_str = "12"
+                        elif hour > 12:
+                            hour_str = str(hour - 12)
+                        else:
+                            hour_str = str(hour)
+                        minute_str = f"{cst_time.minute:02d}"
+                        am_pm = "AM" if cst_time.hour < 12 else "PM"
+                        game_time_str = f"{hour_str}:{minute_str} {am_pm} CST"
+                    except:
+                        pass
+                
+                # Fallback: try gameTimeUTC or gameDateTimeEt
+                if not game_time_str:
+                    for time_key in ['gameTimeUTC', 'gameDateTimeEt', 'gameDateTime']:
+                        if time_key in game and game[time_key]:
+                            try:
+                                from datetime import datetime
+                                # Try parsing various formats
+                                time_val = game[time_key]
+                                if isinstance(time_val, str):
+                                    # Try ISO format
+                                    dt = datetime.fromisoformat(time_val.replace('Z', '+00:00'))
+                                    cst_time = dt.astimezone(cst_tz)
+                                    # Format as "7:30 PM CST" (cross-platform safe)
+                                    hour = cst_time.hour
+                                    if hour == 0:
+                                        hour_str = "12"
+                                    elif hour > 12:
+                                        hour_str = str(hour - 12)
+                                    else:
+                                        hour_str = str(hour)
+                                    minute_str = f"{cst_time.minute:02d}"
+                                    am_pm = "AM" if cst_time.hour < 12 else "PM"
+                                    game_time_str = f"{hour_str}:{minute_str} {am_pm} CST"
+                                    break
+                            except:
+                                continue
+                
+                status_text = game.get('gameStatusText', '')
+                # Combine status and time if we have it
+                if game_time_str and 'Final' not in status_text and 'LIVE' not in status_text:
+                    display_status = f"{status_text} ({game_time_str})" if status_text else game_time_str
+                else:
+                    display_status = status_text
+                
                 game_list.append({
                     'home': game['homeTeam']['teamTricode'],
                     'away': game['awayTeam']['teamTricode'],
-                    'status': game['gameStatusText']
+                    'status': display_status,
+                    'raw_status': game.get('gameStatusText', ''),
+                    'game_time_cst': game_time_str
                 })
             
             if len(game_list) > 0:
@@ -146,15 +213,15 @@ def get_todays_games():
             else:
                 # Fallback if no games today
                 return [
-                    {'home': 'LAL', 'away': 'GSW', 'status': 'Example'},
-                    {'home': 'BOS', 'away': 'MIA', 'status': 'Example'}
+                    {'home': 'LAL', 'away': 'GSW', 'status': 'Example', 'raw_status': 'Example', 'game_time_cst': None},
+                    {'home': 'BOS', 'away': 'MIA', 'status': 'Example', 'raw_status': 'Example', 'game_time_cst': None}
                 ]
         except Exception as e:
             if attempt >= max_retries:
                 # Return fallback games on final failure
                 return [
-                    {'home': 'LAL', 'away': 'GSW', 'status': 'Example'},
-                    {'home': 'BOS', 'away': 'MIA', 'status': 'Example'}
+                    {'home': 'LAL', 'away': 'GSW', 'status': 'Example', 'raw_status': 'Example', 'game_time_cst': None},
+                    {'home': 'BOS', 'away': 'MIA', 'status': 'Example', 'raw_status': 'Example', 'game_time_cst': None}
                 ]
             import time
             time.sleep(0.5)  # Quick retry delay
