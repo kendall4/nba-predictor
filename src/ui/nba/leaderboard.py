@@ -32,6 +32,18 @@ def render(predictions):
         }.get(injury_status, '⚪')
         
         with st.expander(f"#{i+1}: {status_icon} {player['player_name']} ({player['team']} vs {player['opponent']}) - Value: {player['overall_value']:.1f}", expanded=i<3):
+            # Clickable link to view full player details
+            if st.button(f"📊 View Full Stats & Visualizations", key=f"view_player_{i}_{player_name}"):
+                st.session_state['selected_player_for_detail'] = player['player_name']
+                st.session_state['selected_player_predictions'] = predictions.to_dict('records')
+            
+            # Show detail view if this player is selected
+            if st.session_state.get('selected_player_for_detail') == player['player_name']:
+                from src.ui.components.player_detail_view import render_player_detail
+                st.markdown("---")
+                render_player_detail(player['player_name'], predictions)
+                st.markdown("---")
+            
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Minutes", f"{player['minutes']:.0f}")

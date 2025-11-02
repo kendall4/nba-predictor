@@ -3,98 +3,21 @@ import pandas as pd
 from src.analysis.hot_hand_tracker import HotHandTracker
 from src.analysis.alt_line_optimizer import AltLineOptimizer
 from src.services.injury_tracker import InjuryTracker
+from src.ui.components.player_detail_view import render_player_detail
 
 def render(predictions):
     st.header("🧑‍💻 Player Explorer")
-    st.caption("Search a player, view recent logs, check lines and EV")
+    st.caption("Search a player, view mobile-style visualizations, advanced stats, and game logs")
     tracker = HotHandTracker(blend_mode="latest")
     names_pred = sorted(predictions['player_name'].unique().tolist())
     names_roster = sorted(tracker.players['PLAYER_NAME'].unique().tolist()) if 'PLAYER_NAME' in tracker.players.columns else []
     all_names = sorted(set(names_pred) | set(names_roster))
     selected_player = st.selectbox("Search Player", options=all_names)
     
-    # Show injury status
-    tracker_injury = InjuryTracker()
-    with st.spinner("Checking injury status..."):
-        try:
-            injury_status = tracker_injury.get_player_status(selected_player)
-            if injury_status['status'] != 'Unknown':
-                status_color = {
-                    'Healthy': '🟢',
-                    'Questionable': '🟡',
-                    'Out': '🔴'
-                }
-                icon = status_color.get(injury_status['status'], '⚪')
-                st.write(f"{icon} **Status:** {injury_status['status']}")
-                if injury_status.get('injury'):
-                    st.caption(f"Injury: {injury_status['injury']}")
-        except Exception as e:
-            st.caption(f"Injury status unavailable")
+    # Show player detail view (main feature with visualizations, advanced stats, game logs)
+    if selected_player:
+        render_player_detail(selected_player, predictions)
     
-    recent_n = st.slider("Recent games", 3, 20, 10)
-    
-    # Fetch gamelogs with timeout handling
-    logs = None
-    with st.spinner(f"Loading {selected_player}'s game logs..."):
-        try:
-            logs = tracker.get_player_gamelog(selected_player, season='2025-26')
-        except Exception as e:
-            st.warning(f"⚠️ Could not fetch gamelogs: {e}")
-            st.info("💡 Try again or check if player name matches NBA API format")
-            logs = None
-    
-    if logs is None or len(logs) == 0:
-        st.warning("⚠️ No gamelogs found for 2025-26 season.")
-        st.info("💡 **Why this might happen:**\n"
-                "- Season hasn't started yet (will use 2024-25 data as fallback)\n"
-                "- Player name doesn't match NBA API format\n"
-                "- API timeout (try again)\n"
-                "- Player hasn't played any games this season")
-        
-        # Try to show if player exists
-        if selected_player in tracker.players['PLAYER_NAME'].values if 'PLAYER_NAME' in tracker.players.columns else []:
-            st.caption(f"✅ Player found in roster. Trying fallback to 2024-25 season...")
-            try:
-                logs_fallback = tracker.get_player_gamelog(selected_player, season='2024-25')
-                if logs_fallback is not None and len(logs_fallback) > 0:
-                    st.success(f"✅ Found {len(logs_fallback)} games from 2024-25 season")
-                    show_cols = [c for c in ['GAME_DATE','MATCHUP','PTS','REB','AST','FG3M'] if c in logs_fallback.columns]
-                    st.dataframe(logs_fallback[show_cols].head(recent_n), use_container_width=True, hide_index=True)
-                    logs = logs_fallback  # Use fallback for rest of UI
-            except Exception:
-                pass
-    else:
-        show_cols = [c for c in ['GAME_DATE','MATCHUP','PTS','REB','AST','FG3M'] if c in logs.columns]
-        st.subheader("Recent Game Logs")
-        st.dataframe(logs[show_cols].head(recent_n), use_container_width=True, hide_index=True)
-        
-        # Show H2H summary if player has opponent today
-        row = predictions[predictions['player_name'] == selected_player].head(1)
-        if len(row) == 1:
-            opp = row.iloc[0]['opponent']
-            st.markdown("---")
-            st.subheader(f"H2H vs {opp}")
-            try:
-                from src.utils.h2h_stats import get_h2h_summary
-                h2h_summary = get_h2h_summary(selected_player, opp, season='2025-26')
-                if h2h_summary:
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Games", h2h_summary['total_games'])
-                        st.metric("Avg PTS", f"{h2h_summary['avg_pts']:.1f}")
-                    with col2:
-                        st.metric("Avg REB", f"{h2h_summary['avg_reb']:.1f}")
-                        st.metric("Avg AST", f"{h2h_summary['avg_ast']:.1f}")
-                    with col3:
-                        if h2h_summary.get('recent_vs_older'):
-                            trend = h2h_summary['recent_vs_older']['trend']
-                            st.write(f"**Trend:** {trend.upper()}")
-                            st.write(f"Recent 3: {h2h_summary['recent_vs_older']['recent_avg_pts']:.1f} PPG")
-                else:
-                    st.info("No H2H data available (will include previous season if needed)")
-            except Exception as e:
-                st.caption(f"H2H summary unavailable: {e}")
-
     st.markdown("---")
     st.subheader("Lines & Expected Value")
     stat = st.selectbox("Stat", options=["points","rebounds","assists","threes"], index=0)
@@ -109,6 +32,15 @@ def render(predictions):
     line_value = st.number_input("Main line", min_value=0.0, max_value=100.0, value=float(base_line), step=0.5)
     main_odds = st.number_input("Main line odds (American)", value=-110, step=5)
 
+    # Get logs for EV calculation
+    logs = None
+    try:
+        logs = tracker.get_player_gamelog(selected_player, season='2025-26')
+        if logs is None or len(logs) == 0:
+            logs = tracker.get_player_gamelog(selected_player, season='2024-25')
+    except:
+        pass
+    
     pred_val = None
     if len(row) == 1:
         if stat == 'points' and 'pred_points' in row.columns:
@@ -121,7 +53,7 @@ def render(predictions):
         col_map = {'points':'PTS','rebounds':'REB','assists':'AST','threes':'FG3M'}
         sc = col_map.get(stat)
         if sc in logs.columns:
-            pred_val = float(logs[sc].head(recent_n).mean())
+            pred_val = float(logs[sc].head(10).mean()) if len(logs) > 0 else None
 
     if pred_val is not None:
         optimizer = AltLineOptimizer()
