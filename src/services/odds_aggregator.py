@@ -72,15 +72,35 @@ class OddsAggregator:
                 # Per official API docs: player_props is general, or use specific markets:
                 # player_points, player_rebounds, player_assists, etc.
                 # Using 'player_props' gets all player props in one request
+                # IMPORTANT: Parameter name is 'api_key' not 'apiKey' (per official samples)
                 params = {
-                    'apiKey': self.api_key,
+                    'api_key': self.api_key,  # Fixed: use 'api_key' not 'apiKey'
                     'regions': ','.join(self.regions),
                     'markets': 'player_props',  # General market (can also use player_points, player_rebounds, etc.)
                     'bookmakers': ','.join(self.books[:5]),  # Limit to avoid rate limits
-                    'oddsFormat': 'american'  # Use American odds format (per API docs)
+                    'oddsFormat': 'american',  # Use American odds format (per API docs)
+                    'dateFormat': 'iso'  # Add date format for consistency
                 }
                 
                 response = requests.get(url, params=params, timeout=20)
+                
+                # Better error handling - check status before raise_for_status
+                if response.status_code != 200:
+                    error_msg = f"API returned status {response.status_code}"
+                    if debug:
+                        error_msg += f": {response.text}"
+                    if response.status_code == 401:
+                        if debug:
+                            print(f"❌ Authentication error: Invalid API key")
+                        return None
+                    elif response.status_code == 429:
+                        if debug:
+                            print(f"⚠️  Rate limit exceeded")
+                        return pd.DataFrame()  # Return empty, don't fail completely
+                    elif debug:
+                        print(f"❌ API Error: {error_msg}")
+                    return None
+                
                 response.raise_for_status()
                 
                 # Check rate limits and usage from headers (per official API docs)
@@ -284,15 +304,19 @@ class OddsAggregator:
             return pd.DataFrame(comparison)
         
         except requests.exceptions.RequestException as e:
-            print(f"❌ Error fetching odds: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                if e.response.status_code == 401:
-                    print("   Invalid API key")
-                elif e.response.status_code == 429:
-                    print("   Rate limit exceeded. Free tier: 500 requests/month")
+            if debug:
+                print(f"❌ Error fetching odds: {e}")
+                if hasattr(e, 'response') and e.response is not None:
+                    if e.response.status_code == 401:
+                        print("   Invalid API key")
+                    elif e.response.status_code == 429:
+                        print("   Rate limit exceeded. Free tier: 500 requests/month")
             return None
         except Exception as e:
-            print(f"❌ Error parsing odds: {e}")
+            if debug:
+                print(f"❌ Error parsing odds: {e}")
+                import traceback
+                traceback.print_exc()
             return None
     
     def compare_books(self, player_name: str, stat: str, line: float):
