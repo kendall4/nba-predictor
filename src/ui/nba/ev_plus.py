@@ -119,7 +119,7 @@ def render(predictions, games):
         else:
             # Need to regenerate for new stat
             st.info("Stat changed - click 'Find EV+ Bets' to refresh")
-            return
+            st.stop()  # Use st.stop() instead of return
         
         # Apply filters
         filtered_bets = bets_df.copy()
@@ -142,7 +142,8 @@ def render(predictions, games):
         if len(filtered_bets) == 0:
             st.warning("No bets found matching filters.")
             st.info("💡 Adjust filters or try a different stat.")
-            return
+            # Don't return early - show empty state instead
+            st.stop()  # Use st.stop() instead of return to prevent page jump
         
         # Rename for clarity
         ev_plus_bets = filtered_bets

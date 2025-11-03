@@ -248,7 +248,7 @@ def make_player_clickable(player_name: str, key_prefix: str = "player") -> bool:
         # Show as unselected
         if st.button(f"👤 {player_name}", key=f"btn_{key_prefix}_{player_name}"):
             st.session_state[session_key] = player_name
-            st.rerun()
+            # Don't use st.rerun() - let Streamlit handle the rerun naturally
             return True
     
     return False

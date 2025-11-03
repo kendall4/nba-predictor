@@ -343,33 +343,37 @@ def render(predictions):
     
     lines_df = pd.DataFrame(rows)
     
-    # Check if we have any data
+    # Check if we have any data - but don't return early, show message instead
     if len(lines_df) == 0:
         st.warning("⚠️ No lines found matching the criteria.")
         if show_odds:
             st.info("💡 If you're filtering by odds, try unchecking 'Show Live Betting Odds' or adjust your book filters.")
-        return
+        # Create empty DataFrame with expected columns to avoid KeyError
+        lines_df = pd.DataFrame(columns=['Player', 'Team', 'Opponent', 'Stat', 'Line', 'Pred', 'Value', 'IP', 'Over Odds', 'Under Odds', 'Book'])
     
-    # Ensure required columns exist
+    # Ensure required columns exist - add missing columns if needed
     required_cols = ['Stat', 'Team', 'Opponent', 'Value']
-    missing_cols = [col for col in required_cols if col not in lines_df.columns]
-    if missing_cols:
-        st.error(f"❌ Missing required columns: {missing_cols}")
-        st.info("💡 This may happen if no data was found. Try adjusting your filters.")
-        return
+    for col in required_cols:
+        if col not in lines_df.columns:
+            lines_df[col] = None
     
     stat_filter = st.multiselect("Filter stats", options=["points","rebounds","assists"], default=["points","rebounds","assists"])
     team_filter = st.multiselect("Filter teams", options=sorted(predictions['team'].unique().tolist()))
     opp_filter = st.multiselect("Filter opponents", options=sorted(predictions['opponent'].unique().tolist()))
     min_value_filter = st.slider("Minimum value", -10.0, 10.0, 0.0, 0.5)
     
-    df = lines_df[lines_df['Stat'].isin(stat_filter)].copy()
-    if team_filter:
-        df = df[df['Team'].isin(team_filter)]
-    if opp_filter:
-        df = df[df['Opponent'].isin(opp_filter)]
-    df = df[df['Value'] >= min_value_filter]
-    df = df.sort_values('Value', ascending=False)
+    # Filter data - handle empty DataFrame gracefully
+    if len(lines_df) > 0:
+        df = lines_df[lines_df['Stat'].isin(stat_filter)].copy()
+        if team_filter:
+            df = df[df['Team'].isin(team_filter)]
+        if opp_filter:
+            df = df[df['Opponent'].isin(opp_filter)]
+        if 'Value' in df.columns:
+            df = df[df['Value'] >= min_value_filter]
+        df = df.sort_values('Value', ascending=False)
+    else:
+        df = lines_df.copy()
     
     # Reorder columns to show IP and odds prominently
     base_cols = ['Player', 'Team', 'Opponent', 'Stat', 'Line', 'Pred']
