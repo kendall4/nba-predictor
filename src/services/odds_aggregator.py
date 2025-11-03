@@ -36,8 +36,11 @@ class OddsAggregator:
         
         self.api_key = api_key
         if not self.api_key:
-            print("⚠️  ODDS_API_KEY not found. Set it in Streamlit secrets, .env, or pass as argument.")
-            print("   Get free key: https://the-odds-api.com/")
+            try:
+                print("⚠️  ODDS_API_KEY not found. Set it in Streamlit secrets, .env, or pass as argument.")
+                print("   Get free key: https://the-odds-api.com/")
+            except (BrokenPipeError, OSError):
+                pass  # Streamlit context - print statements can cause pipe errors
         self.base_url = "https://api.the-odds-api.com/v4"
         self.regions = ['us']  # US odds
         # Note: Player props market may vary by bookmaker - try both common names

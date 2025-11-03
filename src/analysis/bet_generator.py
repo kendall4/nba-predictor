@@ -184,11 +184,18 @@ class BetGenerator:
             return pd.DataFrame()
         
         # Get odds for all players
-        print("📊 Fetching odds from sportsbooks...")
+        try:
+            print("📊 Fetching odds from sportsbooks...")
+        except (BrokenPipeError, OSError):
+            pass  # Streamlit context - print statements can cause pipe errors
+        
         all_odds = self.odds_aggregator.get_player_props(debug=False)
         
         if all_odds is None or len(all_odds) == 0:
-            print("⚠️  No odds data available")
+            try:
+                print("⚠️  No odds data available")
+            except (BrokenPipeError, OSError):
+                pass
             return pd.DataFrame()
         
         # Filter by stat type
@@ -197,7 +204,10 @@ class BetGenerator:
         ]
         
         if len(stat_filtered) == 0:
-            print(f"⚠️  No {stat_type} odds found")
+            try:
+                print(f"⚠️  No {stat_type} odds found")
+            except (BrokenPipeError, OSError):
+                pass
             return pd.DataFrame()
         
         # Analyze each bet

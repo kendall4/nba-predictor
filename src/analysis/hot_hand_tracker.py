@@ -45,9 +45,14 @@ class HotHandTracker:
         self.cache_dir = cache_dir
         os.makedirs(self.cache_dir, exist_ok=True)
 
-        print("✅ Hot Hand Tracker loaded (two-season baselines)")
-        print(f"   {len(self.players)} players analyzed")
-        print("\n⚠️  NOTE: Using season-level data for hot-hand logic; gamelogs fetched on-demand for consistency")
+        # Safe print for Streamlit (avoid BrokenPipeError)
+        try:
+            print("✅ Hot Hand Tracker loaded (two-season baselines)")
+            print(f"   {len(self.players)} players analyzed")
+            print("\n⚠️  NOTE: Using season-level data for hot-hand logic; gamelogs fetched on-demand for consistency")
+        except (BrokenPipeError, OSError):
+            # Streamlit context - print statements can cause pipe errors
+            pass
 
     def get_player_baseline(self, player_name):
         """Get player's blended season averages"""

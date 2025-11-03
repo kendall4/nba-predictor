@@ -9,7 +9,10 @@ class AltLineOptimizer:
     """
     
     def __init__(self):
-        print("✅ Alt Line Optimizer ready")
+        try:
+            print("✅ Alt Line Optimizer ready")
+        except (BrokenPipeError, OSError):
+            pass  # Streamlit context - print statements can cause pipe errors
     
     def american_to_decimal(self, american_odds):
         """Convert American odds to decimal"""
