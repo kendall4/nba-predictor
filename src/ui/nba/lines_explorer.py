@@ -343,6 +343,21 @@ def render(predictions):
     
     lines_df = pd.DataFrame(rows)
     
+    # Check if we have any data
+    if len(lines_df) == 0:
+        st.warning("⚠️ No lines found matching the criteria.")
+        if show_odds:
+            st.info("💡 If you're filtering by odds, try unchecking 'Show Live Betting Odds' or adjust your book filters.")
+        return
+    
+    # Ensure required columns exist
+    required_cols = ['Stat', 'Team', 'Opponent', 'Value']
+    missing_cols = [col for col in required_cols if col not in lines_df.columns]
+    if missing_cols:
+        st.error(f"❌ Missing required columns: {missing_cols}")
+        st.info("💡 This may happen if no data was found. Try adjusting your filters.")
+        return
+    
     stat_filter = st.multiselect("Filter stats", options=["points","rebounds","assists"], default=["points","rebounds","assists"])
     team_filter = st.multiselect("Filter teams", options=sorted(predictions['team'].unique().tolist()))
     opp_filter = st.multiselect("Filter opponents", options=sorted(predictions['opponent'].unique().tolist()))
