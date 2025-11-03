@@ -167,6 +167,8 @@ class OddsAggregator:
                 if debug:
                     print("⚠️  No events returned from API")
                     print("💡 Tip: Check if there are NBA games scheduled for today")
+                    print(f"   URL called: {url}")
+                    print(f"   Parameters: {params}")
                 return pd.DataFrame()
             
             # Parse player props

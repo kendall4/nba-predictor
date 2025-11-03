@@ -97,6 +97,9 @@ def render(predictions):
     # Option to fetch and show actual betting odds
     show_odds = st.checkbox("Show Live Betting Odds", value=True, help="Fetch real odds from sportsbooks (requires ODDS_API_KEY)")
     
+    # Debug mode for odds API
+    debug_odds = st.checkbox("🐛 Debug Odds API", value=False, help="Show detailed API response and error information")
+    
     optimizer = AltLineOptimizer()
     
     # Fetch odds if requested (with caching)
@@ -105,22 +108,45 @@ def render(predictions):
         try:
             aggregator = OddsAggregator()
             if aggregator.api_key:
-                # Use cached data to avoid multiple API calls
-                odds_data = _fetch_cached_odds()
-                if odds_data is not None and len(odds_data) > 0:
-                    st.success(f"✅ Found odds for {odds_data['player'].nunique()} players ({len(odds_data)} total props)")
-                    # Debug: show sample of stats found
-                    if 'stat' in odds_data.columns:
-                        stats_found = odds_data['stat'].unique().tolist()
-                        st.caption(f"Stats available: {', '.join(stats_found[:10])}")
-                else:
-                    st.warning("⚠️ No odds found. Odds may not be available yet or API returned empty.")
+                # Fetch odds with optional debug
+                with st.spinner("Fetching odds from sportsbooks..."):
+                    odds_data = _fetch_cached_odds(debug=debug_odds)
+                    
+                    if debug_odds:
+                        st.info("🔍 Debug Mode: Checking API response...")
+                    
+                    if odds_data is not None and len(odds_data) > 0:
+                        st.success(f"✅ Found odds for {odds_data['player'].nunique()} players ({len(odds_data)} total props)")
+                        # Debug: show sample of stats found
+                        if 'stat' in odds_data.columns:
+                            stats_found = odds_data['stat'].unique().tolist()
+                            st.caption(f"Stats available: {', '.join(stats_found[:10])}")
+                    elif odds_data is not None and len(odds_data) == 0:
+                        st.warning("⚠️ No odds found. API returned empty response.")
+                        if debug_odds:
+                            st.info("💡 This could mean:\n"
+                                  "- No NBA games today\n"
+                                  "- Player props not available yet\n"
+                                  "- Market 'player_props' not supported by selected books\n"
+                                  "- Check console/terminal for detailed API logs")
+                    else:
+                        # odds_data is None - API error
+                        st.warning("⚠️ No odds found. API returned error or no response.")
+                        if debug_odds:
+                            st.info("💡 Possible issues:\n"
+                                  "- Invalid API key\n"
+                                  "- Rate limit exceeded\n"
+                                  "- Network error\n"
+                                  "- Check console/terminal for detailed error logs")
             else:
-                st.info("💡 Set ODDS_API_KEY in secrets to view live odds")
+                st.info("💡 Set ODDS_API_KEY in secrets (.env file or Streamlit secrets) to view live odds")
+                if debug_odds:
+                    st.code("# In .env file:\nODDS_API_KEY=your_key_here\n\n# Or in Streamlit secrets:\n# ODDS_API_KEY: your_key_here")
         except Exception as e:
             st.error(f"❌ Error fetching odds: {str(e)}")
-            import traceback
-            st.code(traceback.format_exc())
+            if debug_odds:
+                import traceback
+                st.code(traceback.format_exc())
             odds_data = None
     
     rows = []
