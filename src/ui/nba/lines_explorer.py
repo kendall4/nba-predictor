@@ -168,48 +168,12 @@ def render(predictions):
     # Debug mode for odds API
     debug_odds = st.checkbox("🐛 Debug Odds API", value=False, help="Show detailed API response and error information")
     
-    # Book filter - only show if odds are enabled
+    # Book filter - will be set after odds are fetched (see below)
     allowed_books = None
-    if show_odds:
-        all_books = []
-        try:
-            aggregator = OddsAggregator()
-            if aggregator.api_key:
-                # Try to get a sample of odds to see available books
-                sample_odds = _fetch_cached_odds_no_debug()
-                if sample_odds is not None and len(sample_odds) > 0 and 'book' in sample_odds.columns:
-                    all_books = sorted(sample_odds['book'].unique().tolist())
-        except:
-            pass
-        
-        if len(all_books) > 0:
-            with st.expander("📚 Filter Sportsbooks", expanded=False):
-                selected_books = st.multiselect(
-                    "Select sportsbooks to show",
-                    options=all_books,
-                    default=all_books,  # Show all by default
-                    help="Only lines from selected books will be displayed"
-                )
-                if len(selected_books) > 0:
-                    allowed_books = selected_books
-                else:
-                    st.warning("⚠️ No books selected - no odds will be shown")
-        else:
-            # Default books if we can't detect them
-            default_books = ['draftkings', 'fanduel', 'espnbet', 'betmgm', 'caesars']
-            with st.expander("📚 Filter Sportsbooks", expanded=False):
-                selected_books = st.multiselect(
-                    "Select sportsbooks to show",
-                    options=default_books,
-                    default=default_books,
-                    help="Only lines from selected books will be displayed"
-                )
-                if len(selected_books) > 0:
-                    allowed_books = selected_books
     
     optimizer = AltLineOptimizer()
     
-    # Fetch odds if requested (with caching)
+    # Fetch odds if requested (with caching) - MUST happen before book filtering
     odds_data = None
     if show_odds:
         try:
@@ -228,6 +192,32 @@ def render(predictions):
                         if 'stat' in odds_data.columns:
                             stats_found = odds_data['stat'].unique().tolist()
                             st.caption(f"Stats available: {', '.join(stats_found[:10])}")
+                        
+                        # Show book filter based on ACTUAL available books in odds data
+                        if 'book' in odds_data.columns:
+                            actual_books = sorted(odds_data['book'].unique().tolist())
+                            if len(actual_books) > 0:
+                                with st.expander("📚 Filter Sportsbooks", expanded=False):
+                                    # Use session state to remember selection
+                                    filter_key = 'lines_explorer_selected_books'
+                                    if filter_key not in st.session_state:
+                                        st.session_state[filter_key] = actual_books  # Default to all
+                                    
+                                    selected_books = st.multiselect(
+                                        "Select sportsbooks to show",
+                                        options=actual_books,
+                                        default=st.session_state.get(filter_key, actual_books),
+                                        help="Only lines from selected books will be displayed",
+                                        key='lines_book_filter'
+                                    )
+                                    
+                                    if len(selected_books) > 0:
+                                        allowed_books = selected_books
+                                        st.session_state[filter_key] = selected_books
+                                    else:
+                                        st.warning("⚠️ No books selected - showing all available books")
+                                        allowed_books = actual_books
+                                        st.session_state[filter_key] = actual_books
                     elif odds_data is not None and len(odds_data) == 0:
                         st.warning("⚠️ No odds found. API returned empty response.")
                         if debug_odds:
@@ -236,6 +226,8 @@ def render(predictions):
                                   "- Player props not available yet\n"
                                   "- Market 'player_props' not supported by selected books\n"
                                   "- Check console/terminal for detailed API logs")
+                        # Clear book filter if no data
+                        allowed_books = None
                     else:
                         # odds_data is None - API error
                         st.warning("⚠️ No odds found. API returned error or no response.")
@@ -245,16 +237,20 @@ def render(predictions):
                                   "- Rate limit exceeded\n"
                                   "- Network error\n"
                                   "- Check console/terminal for detailed error logs")
+                        # Clear book filter if no data
+                        allowed_books = None
             else:
                 st.info("💡 Set ODDS_API_KEY in secrets (.env file or Streamlit secrets) to view live odds")
                 if debug_odds:
                     st.code("# In .env file:\nODDS_API_KEY=your_key_here\n\n# Or in Streamlit secrets:\n# ODDS_API_KEY: your_key_here")
+                allowed_books = None
         except Exception as e:
             st.error(f"❌ Error fetching odds: {str(e)}")
             if debug_odds:
                 import traceback
                 st.code(traceback.format_exc())
             odds_data = None
+            allowed_books = None
     
     rows = []
     for _, r in predictions.iterrows():
