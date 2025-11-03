@@ -55,6 +55,24 @@ def render(predictions, games):
         show_mainline_only = st.checkbox("Mainline only (≤ +200)", value=False, key="ev_plus_mainline")
         show_longshot_only = st.checkbox("Longshots only (≥ +500)", value=False, key="ev_plus_longshot")
     
+    # Book filter - will be populated after bets are loaded
+    selected_books = None
+    if st.session_state.get('ev_plus_bets') is not None and len(st.session_state.get('ev_plus_bets', [])) > 0:
+        bets_df = st.session_state['ev_plus_bets']
+        if 'book' in bets_df.columns:
+            available_books = sorted(bets_df['book'].unique().tolist())
+            if len(available_books) > 0:
+                with st.expander("📚 Filter by Sportsbook", expanded=False):
+                    selected_books = st.multiselect(
+                        "Select sportsbooks to show",
+                        options=available_books,
+                        default=available_books,  # Show all by default
+                        help="Only bets from selected books will be displayed",
+                        key="ev_plus_book_filter"
+                    )
+                    if len(selected_books) == 0:
+                        st.warning("⚠️ No books selected - no bets will be shown")
+    
     # Generate EV+ bets
     generator = BetGenerator(odds_api_key=api_key)
     optimizer = AltLineOptimizer()
@@ -105,6 +123,11 @@ def render(predictions, games):
         
         # Apply filters
         filtered_bets = bets_df.copy()
+        
+        # Filter by book if specified
+        if selected_books is not None and len(selected_books) > 0:
+            if 'book' in filtered_bets.columns:
+                filtered_bets = filtered_bets[filtered_bets['book'].isin(selected_books)]
         
         # Filter to EV+ only if checkbox is checked
         if only_ev_plus and min_ev is not None:
