@@ -80,11 +80,38 @@ def find_matching_odds(player_name, stat, target_line, odds_df):
     return over_odds, under_odds, book, sportsbook_line
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def _fetch_cached_odds():
-    """Cached function to fetch odds"""
+def _fetch_cached_odds_no_debug():
+    """Cached function to fetch odds (without debug for caching)"""
     aggregator = OddsAggregator()
     if aggregator.api_key:
         return aggregator.get_player_props(debug=False)
+    return None
+
+def _fetch_cached_odds(debug=False):
+    """Fetch odds with optional debug output to Streamlit"""
+    if not debug:
+        # Use cached version for non-debug mode
+        return _fetch_cached_odds_no_debug()
+    else:
+        # Bypass cache for debug mode to see fresh API calls
+        try:
+            aggregator = OddsAggregator()
+            if aggregator.api_key:
+                props = aggregator.get_player_props(debug=debug)
+                if debug and props is not None:
+                    if len(props) == 0:
+                        st.warning("⚠️ API returned empty DataFrame - no player props found")
+                    else:
+                        st.success(f"✅ API returned {len(props)} props")
+                return props
+            else:
+                if debug:
+                    st.warning("⚠️ ODDS_API_KEY not set")
+        except Exception as e:
+            if debug:
+                st.error(f"❌ Error in _fetch_cached_odds: {e}")
+                import traceback
+                st.code(traceback.format_exc())
     return None
 
 def render(predictions):
