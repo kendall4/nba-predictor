@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from src.utils.odds_utils import calculate_implied_prob_from_line
+from src.utils.odds_utils import calculate_implied_prob_from_line, american_to_implied_prob
 from src.analysis.alt_line_optimizer import AltLineOptimizer
 from src.services.odds_aggregator import OddsAggregator
 
@@ -150,7 +150,17 @@ def render(predictions):
     st.caption("Browse by stat across all players; filter and sort by value with Implied Probability")
     
     # Add option to show IP
-    show_ip = st.checkbox("Show Implied Probability (Model IP)", value=True)
+    show_ip = st.checkbox("Show Implied Probability", value=True)
+    if show_ip:
+        ip_type = st.radio(
+            "IP Calculation Method",
+            options=["Model IP (prediction vs line)", "Book IP (from odds)", "Both"],
+            index=2,  # Default to "Both"
+            horizontal=True,
+            help="Model IP: Our model's probability player exceeds line | Book IP: Sportsbook's implied probability from odds"
+        )
+    else:
+        ip_type = None
     
     # Option to fetch and show actual betting odds
     show_odds = st.checkbox("Show Live Betting Odds", value=True, help="Fetch real odds from sportsbooks (requires ODDS_API_KEY)")
@@ -262,9 +272,25 @@ def render(predictions):
         
         # Only add to rows if we have BOTH over and under odds
         if over_odds is not None and under_odds is not None:
-            # Use sportsbook line for IP calculation if available, otherwise use rounded model line
+            # Calculate Model IP (model prediction vs sportsbook line)
             line_for_ip = sportsbook_line if sportsbook_line is not None else line_points_rounded
-            ip_points = calculate_implied_prob_from_line(line_for_ip, pred_points) if show_ip else None
+            model_ip = calculate_implied_prob_from_line(line_for_ip, pred_points) if show_ip else None
+            
+            # Calculate Book IP (from over odds - this is what the book thinks for OVER)
+            book_ip_over = american_to_implied_prob(over_odds) if show_ip and over_odds is not None else None
+            
+            # Format IP based on user selection
+            if show_ip and ip_type:
+                if ip_type == "Model IP (prediction vs line)":
+                    ip_display = f"{model_ip:.1%}" if model_ip is not None else None
+                elif ip_type == "Book IP (from odds)":
+                    ip_display = f"{book_ip_over:.1%}" if book_ip_over is not None else None
+                else:  # Both
+                    model_ip_str = f"{model_ip:.1%}" if model_ip is not None else "N/A"
+                    book_ip_str = f"{book_ip_over:.1%}" if book_ip_over is not None else "N/A"
+                    ip_display = f"{model_ip_str} / {book_ip_str}"
+            else:
+                ip_display = None
             
             over_str = f"{over_odds:+d}"
             under_str = f"{under_odds:+d}"
@@ -277,7 +303,7 @@ def render(predictions):
                 "Line": line_points_rounded,  # Show rounded line
                 "Pred": pred_points, 
                 "Value": r['point_value'],
-                "IP": f"{ip_points:.1%}" if ip_points is not None else None,
+                "IP": ip_display,
                 "Over Odds": over_str if show_odds else None,
                 "Under Odds": under_str if show_odds else None,
                 "Book": book if show_odds else None
@@ -293,7 +319,21 @@ def render(predictions):
         # Only add to rows if we have BOTH over and under odds
         if over_odds is not None and under_odds is not None:
             line_for_ip = sportsbook_line if sportsbook_line is not None else line_rebounds_rounded
-            ip_rebounds = calculate_implied_prob_from_line(line_for_ip, pred_rebounds, std_dev=pred_rebounds*0.25) if show_ip else None
+            model_ip = calculate_implied_prob_from_line(line_for_ip, pred_rebounds, std_dev=pred_rebounds*0.25) if show_ip else None
+            book_ip_over = american_to_implied_prob(over_odds) if show_ip and over_odds is not None else None
+            
+            # Format IP based on user selection
+            if show_ip and ip_type:
+                if ip_type == "Model IP (prediction vs line)":
+                    ip_display = f"{model_ip:.1%}" if model_ip is not None else None
+                elif ip_type == "Book IP (from odds)":
+                    ip_display = f"{book_ip_over:.1%}" if book_ip_over is not None else None
+                else:  # Both
+                    model_ip_str = f"{model_ip:.1%}" if model_ip is not None else "N/A"
+                    book_ip_str = f"{book_ip_over:.1%}" if book_ip_over is not None else "N/A"
+                    ip_display = f"{model_ip_str} / {book_ip_str}"
+            else:
+                ip_display = None
             
             over_str = f"{over_odds:+d}"
             under_str = f"{under_odds:+d}"
@@ -306,7 +346,7 @@ def render(predictions):
                 "Line": line_rebounds_rounded,  # Show rounded line
                 "Pred": pred_rebounds, 
                 "Value": r['rebound_value'],
-                "IP": f"{ip_rebounds:.1%}" if ip_rebounds is not None else None,
+                "IP": ip_display,
                 "Over Odds": over_str if show_odds else None,
                 "Under Odds": under_str if show_odds else None,
                 "Book": book if show_odds else None
@@ -322,7 +362,21 @@ def render(predictions):
         # Only add to rows if we have BOTH over and under odds
         if over_odds is not None and under_odds is not None:
             line_for_ip = sportsbook_line if sportsbook_line is not None else line_assists_rounded
-            ip_assists = calculate_implied_prob_from_line(line_for_ip, pred_assists, std_dev=pred_assists*0.30) if show_ip else None
+            model_ip = calculate_implied_prob_from_line(line_for_ip, pred_assists, std_dev=pred_assists*0.30) if show_ip else None
+            book_ip_over = american_to_implied_prob(over_odds) if show_ip and over_odds is not None else None
+            
+            # Format IP based on user selection
+            if show_ip and ip_type:
+                if ip_type == "Model IP (prediction vs line)":
+                    ip_display = f"{model_ip:.1%}" if model_ip is not None else None
+                elif ip_type == "Book IP (from odds)":
+                    ip_display = f"{book_ip_over:.1%}" if book_ip_over is not None else None
+                else:  # Both
+                    model_ip_str = f"{model_ip:.1%}" if model_ip is not None else "N/A"
+                    book_ip_str = f"{book_ip_over:.1%}" if book_ip_over is not None else "N/A"
+                    ip_display = f"{model_ip_str} / {book_ip_str}"
+            else:
+                ip_display = None
             
             over_str = f"{over_odds:+d}"
             under_str = f"{under_odds:+d}"
@@ -335,7 +389,7 @@ def render(predictions):
                 "Line": line_assists_rounded,  # Show rounded line
                 "Pred": pred_assists, 
                 "Value": r['assist_value'],
-                "IP": f"{ip_assists:.1%}" if ip_assists is not None else None,
+                "IP": ip_display,
                 "Over Odds": over_str if show_odds else None,
                 "Under Odds": under_str if show_odds else None,
                 "Book": book if show_odds else None
@@ -388,14 +442,25 @@ def render(predictions):
     df = df[display_cols].copy()
     
     # Rename columns for display
+    # Update IP column name based on selection
     if show_ip and 'IP' in df.columns:
-        df = df.rename(columns={'IP': 'IP (Model)'})
+        if ip_type == "Model IP (prediction vs line)":
+            df = df.rename(columns={'IP': 'Model IP'})
+        elif ip_type == "Book IP (from odds)":
+            df = df.rename(columns={'IP': 'Book IP'})
+        else:  # Both
+            df = df.rename(columns={'IP': 'IP (Model / Book)'})
     
     st.dataframe(df, use_container_width=True, hide_index=True)
     
     captions = []
     if show_ip:
-        captions.append("💡 IP (Model) = Your model's implied probability that player exceeds the sportsbook line")
+        if ip_type == "Model IP (prediction vs line)":
+            captions.append("💡 Model IP = Your model's probability that player exceeds the sportsbook line")
+        elif ip_type == "Book IP (from odds)":
+            captions.append("💡 Book IP = Sportsbook's implied probability from the odds (what the market thinks)")
+        else:  # Both
+            captions.append("💡 IP = Model IP (your model) / Book IP (sportsbook odds). Compare to find edge!")
     if show_odds:
         captions.append("💰 Odds shown are from live sportsbooks (closest line match)")
     captions.append("📊 Lines rounded to sportsbook format (whole or .5)")
