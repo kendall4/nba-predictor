@@ -124,6 +124,49 @@ def render(predictions, games):
         # Rename for clarity
         ev_plus_bets = filtered_bets
         
+        # Calculate outlier status (lines/odds significantly better than market consensus)
+        def detect_outliers(df):
+            """Identify bets where odds are significantly better than market consensus"""
+            df = df.copy()
+            df['is_outlier'] = False
+            df['market_median_odds'] = None
+            df['outlier_score'] = 0.0
+            
+            # Group by player/stat/direction to find market consensus
+            for (player, stat, direction), group in df.groupby(['player', 'stat', 'direction']):
+                if len(group) < 2:
+                    continue  # Need at least 2 books to compare
+                
+                # Calculate median odds for this player/stat/direction across all books
+                median_odds = group['odds'].median()
+                median_ev = group['ev'].median()
+                
+                # Mark outliers: odds significantly better than median (lower negative odds or higher positive odds)
+                for idx in group.index:
+                    odds = group.loc[idx, 'odds']
+                    ev = group.loc[idx, 'ev']
+                    
+                    # Outlier conditions:
+                    # 1. Positive EV bets with odds better than median (for positive odds, higher is better; for negative, lower absolute value is better)
+                    if ev > 0:
+                        if odds > 0:
+                            # Positive odds: higher is better
+                            is_better = odds > median_odds * 1.1  # 10% better
+                        else:
+                            # Negative odds: closer to 0 (less negative) is better
+                            is_better = odds > median_odds  # Less negative = better
+                        
+                        if is_better:
+                            df.loc[idx, 'is_outlier'] = True
+                            df.loc[idx, 'market_median_odds'] = median_odds
+                            # Outlier score: how much better than market
+                            if median_odds != 0:
+                                df.loc[idx, 'outlier_score'] = (odds - median_odds) / abs(median_odds)
+            
+            return df
+        
+        ev_plus_bets = detect_outliers(ev_plus_bets)
+        
         # Sort
         if sort_by == "EV (highest)":
             ev_plus_bets = ev_plus_bets.sort_values('ev', ascending=False)
@@ -136,22 +179,40 @@ def render(predictions, games):
         else:
             ev_plus_bets = ev_plus_bets.sort_values('line', ascending=True)
         
+        # Show outliers first if they exist
+        outlier_count = ev_plus_bets['is_outlier'].sum() if 'is_outlier' in ev_plus_bets.columns else 0
+        if outlier_count > 0:
+            # Sort by outlier status first, then by EV
+            ev_plus_bets = ev_plus_bets.sort_values(['is_outlier', 'ev'], ascending=[False, False])
+        
         ev_positive_count = (ev_plus_bets['ev'] > 0).sum()
+        outlier_count = ev_plus_bets['is_outlier'].sum() if 'is_outlier' in ev_plus_bets.columns else 0
+        
         if only_ev_plus:
             st.success(f"✅ Found {len(ev_plus_bets)} EV+ bets (EV >= {min_ev:.1%})")
+            if outlier_count > 0:
+                st.info(f"🎯 {outlier_count} outlier bets identified (significantly better odds than market consensus)")
         else:
             st.success(f"✅ Found {len(ev_plus_bets)} bets ({ev_positive_count} EV+)")
+            if outlier_count > 0:
+                st.info(f"🎯 {outlier_count} outlier bets identified (significantly better odds than market consensus)")
             
         # Display bets in card format
         for idx, bet in ev_plus_bets.iterrows():
-            # Color code by EV
+            # Color code by EV and outlier status
+            is_outlier = bet.get('is_outlier', False)
+            outlier_badge = "🎯 OUTLIER" if is_outlier else ""
+            
             ev_icon = "🔥" if bet['ev'] > 0.1 else "✅" if bet['ev'] > 0.05 else "💰" if bet['ev'] > 0 else "⚠️" if bet['ev'] > -0.05 else "❌"
             ev_color = bet['ev'] > 0
             
+            title = f"{ev_icon} {bet['player']} {bet['direction']} {bet['line']} {bet['stat'].capitalize()} ({bet['odds']:+d}) - EV: {bet['ev']:+.1%}"
+            if is_outlier:
+                title = f"🎯 {title} [OUTLIER - Better than market]"
+            
             with st.expander(
-                f"{ev_icon} {bet['player']} {bet['direction']} {bet['line']} {bet['stat'].capitalize()} "
-                f"({bet['odds']:+d}) - EV: {bet['ev']:+.1%}",
-                expanded=idx < 3
+                title,
+                expanded=idx < 3 or is_outlier  # Expand outliers
             ):
                 col1, col2, col3, col4 = st.columns(4)
                 
@@ -171,6 +232,13 @@ def render(predictions, games):
                 with col4:
                     st.metric("Prediction", f"{bet['prediction']:.1f}")
                     st.caption(f"Book: {bet['book'].upper()}")
+                
+                # Outlier information
+                if is_outlier and pd.notna(bet.get('market_median_odds')):
+                    median_odds = bet['market_median_odds']
+                    outlier_score = bet.get('outlier_score', 0)
+                    st.success(f"🎯 **Outlier Bet**: This line has odds {bet['odds']:+d} vs market median {median_odds:+.0f} ({outlier_score*100:+.1f}% better)")
+                    st.caption("💡 This book offers significantly better odds than the market consensus - potential value!")
                 
                 # Edge calculation
                 model_prob = bet['probability']

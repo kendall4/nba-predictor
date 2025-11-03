@@ -14,9 +14,18 @@ def round_to_sportsbook_line(line):
     rounded = round(line * 2) / 2  # Round to nearest 0.5
     return rounded
 
-def find_matching_odds(player_name, stat, target_line, odds_df):
+def find_matching_odds(player_name, stat, target_line, odds_df, allowed_books=None):
     """
     Find best matching odds for a player/stat/line combination
+    Only returns lines that have BOTH over AND under odds available
+    
+    Args:
+        player_name: Player name
+        stat: Stat type (points, rebounds, assists)
+        target_line: Target line value
+        odds_df: DataFrame with odds data
+        allowed_books: List of book names to filter by (None = all books)
+    
     Returns: (over_odds, under_odds, best_book, sportsbook_line) or (None, None, None, None)
     """
     if odds_df is None or len(odds_df) == 0:
@@ -26,6 +35,13 @@ def find_matching_odds(player_name, stat, target_line, odds_df):
     required_cols = ['player', 'stat', 'line', 'over_odds', 'under_odds', 'book']
     if not all(col in odds_df.columns for col in required_cols):
         return None, None, None, None
+    
+    # Filter by allowed books if specified
+    working_df = odds_df.copy()
+    if allowed_books is not None and len(allowed_books) > 0:
+        working_df = working_df[working_df['book'].isin(allowed_books)]
+        if len(working_df) == 0:
+            return None, None, None, None
     
     # Normalize player name for matching
     def normalize_name(name):
@@ -37,8 +53,8 @@ def find_matching_odds(player_name, stat, target_line, odds_df):
     stat_lower = stat.lower()
     
     # Filter by stat (try various matches)
-    stat_match = odds_df[
-        odds_df['stat'].astype(str).str.contains(stat_lower, case=False, na=False)
+    stat_match = working_df[
+        working_df['stat'].astype(str).str.contains(stat_lower, case=False, na=False)
     ].copy()
     
     if len(stat_match) == 0:
@@ -62,6 +78,17 @@ def find_matching_odds(player_name, stat, target_line, odds_df):
     if len(player_match) == 0:
         return None, None, None, None
     
+    # CRITICAL: Only keep rows that have BOTH over AND under odds
+    player_match = player_match[
+        (player_match['over_odds'].notna()) & 
+        (player_match['under_odds'].notna()) &
+        (player_match['over_odds'] != None) &
+        (player_match['under_odds'] != None)
+    ]
+    
+    if len(player_match) == 0:
+        return None, None, None, None
+    
     # Find closest line match (use rounded target line)
     target_line_rounded = round_to_sportsbook_line(target_line)
     player_match = player_match.copy()
@@ -76,6 +103,10 @@ def find_matching_odds(player_name, stat, target_line, odds_df):
     under_odds = int(best_match['under_odds']) if pd.notna(best_match.get('under_odds')) and best_match.get('under_odds') is not None else None
     book = str(best_match.get('book', 'N/A'))
     sportsbook_line = float(best_match['line']) if pd.notna(best_match.get('line')) else None
+    
+    # Final check: must have both over and under
+    if over_odds is None or under_odds is None:
+        return None, None, None, None
     
     return over_odds, under_odds, book, sportsbook_line
 
@@ -126,6 +157,45 @@ def render(predictions):
     
     # Debug mode for odds API
     debug_odds = st.checkbox("🐛 Debug Odds API", value=False, help="Show detailed API response and error information")
+    
+    # Book filter - only show if odds are enabled
+    allowed_books = None
+    if show_odds:
+        all_books = []
+        try:
+            aggregator = OddsAggregator()
+            if aggregator.api_key:
+                # Try to get a sample of odds to see available books
+                sample_odds = _fetch_cached_odds_no_debug()
+                if sample_odds is not None and len(sample_odds) > 0 and 'book' in sample_odds.columns:
+                    all_books = sorted(sample_odds['book'].unique().tolist())
+        except:
+            pass
+        
+        if len(all_books) > 0:
+            with st.expander("📚 Filter Sportsbooks", expanded=False):
+                selected_books = st.multiselect(
+                    "Select sportsbooks to show",
+                    options=all_books,
+                    default=all_books,  # Show all by default
+                    help="Only lines from selected books will be displayed"
+                )
+                if len(selected_books) > 0:
+                    allowed_books = selected_books
+                else:
+                    st.warning("⚠️ No books selected - no odds will be shown")
+        else:
+            # Default books if we can't detect them
+            default_books = ['draftkings', 'fanduel', 'espnbet', 'betmgm', 'caesars']
+            with st.expander("📚 Filter Sportsbooks", expanded=False):
+                selected_books = st.multiselect(
+                    "Select sportsbooks to show",
+                    options=default_books,
+                    default=default_books,
+                    help="Only lines from selected books will be displayed"
+                )
+                if len(selected_books) > 0:
+                    allowed_books = selected_books
     
     optimizer = AltLineOptimizer()
     
@@ -187,83 +257,89 @@ def render(predictions):
         line_points_rounded = round_to_sportsbook_line(line_points)
         
         # Get odds if available (returns sportsbook_line too)
-        over_odds, under_odds, book, sportsbook_line = find_matching_odds(player_name, 'points', line_points, odds_data) if show_odds and odds_data is not None else (None, None, None, None)
+        # Only show lines that have BOTH over AND under odds
+        over_odds, under_odds, book, sportsbook_line = find_matching_odds(player_name, 'points', line_points, odds_data, allowed_books) if show_odds and odds_data is not None else (None, None, None, None)
         
-        # Use sportsbook line for IP calculation if available, otherwise use rounded model line
-        line_for_ip = sportsbook_line if sportsbook_line is not None else line_points_rounded
-        ip_points = calculate_implied_prob_from_line(line_for_ip, pred_points) if show_ip else None
-        
-        over_str = f"{over_odds:+d}" if over_odds is not None else "N/A"
-        under_str = f"{under_odds:+d}" if under_odds is not None else "N/A"
-        odds_str = f"{over_str}/{under_str}" if over_odds is not None or under_odds is not None else None
-        
-        rows.append({
-            "Player": player_name, 
-            "Team": r['team'], 
-            "Opponent": r['opponent'], 
-            "Stat": "points", 
-            "Line": line_points_rounded,  # Show rounded line
-            "Pred": pred_points, 
-            "Value": r['point_value'],
-            "IP": f"{ip_points:.1%}" if ip_points is not None else None,
-            "Over Odds": over_str if show_odds else None,
-            "Under Odds": under_str if show_odds else None,
-            "Book": book if show_odds else None
-        })
+        # Only add to rows if we have BOTH over and under odds
+        if over_odds is not None and under_odds is not None:
+            # Use sportsbook line for IP calculation if available, otherwise use rounded model line
+            line_for_ip = sportsbook_line if sportsbook_line is not None else line_points_rounded
+            ip_points = calculate_implied_prob_from_line(line_for_ip, pred_points) if show_ip else None
+            
+            over_str = f"{over_odds:+d}"
+            under_str = f"{under_odds:+d}"
+            
+            rows.append({
+                "Player": player_name, 
+                "Team": r['team'], 
+                "Opponent": r['opponent'], 
+                "Stat": "points", 
+                "Line": line_points_rounded,  # Show rounded line
+                "Pred": pred_points, 
+                "Value": r['point_value'],
+                "IP": f"{ip_points:.1%}" if ip_points is not None else None,
+                "Over Odds": over_str if show_odds else None,
+                "Under Odds": under_str if show_odds else None,
+                "Book": book if show_odds else None
+            })
         
         # Rebounds
         pred_rebounds = r['pred_rebounds']
         line_rebounds = r['line_rebounds']
         line_rebounds_rounded = round_to_sportsbook_line(line_rebounds)
         
-        over_odds, under_odds, book, sportsbook_line = find_matching_odds(player_name, 'rebounds', line_rebounds, odds_data) if show_odds and odds_data is not None else (None, None, None, None)
+        over_odds, under_odds, book, sportsbook_line = find_matching_odds(player_name, 'rebounds', line_rebounds, odds_data, allowed_books) if show_odds and odds_data is not None else (None, None, None, None)
         
-        line_for_ip = sportsbook_line if sportsbook_line is not None else line_rebounds_rounded
-        ip_rebounds = calculate_implied_prob_from_line(line_for_ip, pred_rebounds, std_dev=pred_rebounds*0.25) if show_ip else None
-        
-        over_str = f"{over_odds:+d}" if over_odds is not None else "N/A"
-        under_str = f"{under_odds:+d}" if under_odds is not None else "N/A"
-        
-        rows.append({
-            "Player": player_name, 
-            "Team": r['team'], 
-            "Opponent": r['opponent'], 
-            "Stat": "rebounds", 
-            "Line": line_rebounds_rounded,  # Show rounded line
-            "Pred": pred_rebounds, 
-            "Value": r['rebound_value'],
-            "IP": f"{ip_rebounds:.1%}" if ip_rebounds is not None else None,
-            "Over Odds": over_str if show_odds else None,
-            "Under Odds": under_str if show_odds else None,
-            "Book": book if show_odds else None
-        })
+        # Only add to rows if we have BOTH over and under odds
+        if over_odds is not None and under_odds is not None:
+            line_for_ip = sportsbook_line if sportsbook_line is not None else line_rebounds_rounded
+            ip_rebounds = calculate_implied_prob_from_line(line_for_ip, pred_rebounds, std_dev=pred_rebounds*0.25) if show_ip else None
+            
+            over_str = f"{over_odds:+d}"
+            under_str = f"{under_odds:+d}"
+            
+            rows.append({
+                "Player": player_name, 
+                "Team": r['team'], 
+                "Opponent": r['opponent'], 
+                "Stat": "rebounds", 
+                "Line": line_rebounds_rounded,  # Show rounded line
+                "Pred": pred_rebounds, 
+                "Value": r['rebound_value'],
+                "IP": f"{ip_rebounds:.1%}" if ip_rebounds is not None else None,
+                "Over Odds": over_str if show_odds else None,
+                "Under Odds": under_str if show_odds else None,
+                "Book": book if show_odds else None
+            })
         
         # Assists
         pred_assists = r['pred_assists']
         line_assists = r['line_assists']
         line_assists_rounded = round_to_sportsbook_line(line_assists)
         
-        over_odds, under_odds, book, sportsbook_line = find_matching_odds(player_name, 'assists', line_assists, odds_data) if show_odds and odds_data is not None else (None, None, None, None)
+        over_odds, under_odds, book, sportsbook_line = find_matching_odds(player_name, 'assists', line_assists, odds_data, allowed_books) if show_odds and odds_data is not None else (None, None, None, None)
         
-        line_for_ip = sportsbook_line if sportsbook_line is not None else line_assists_rounded
-        ip_assists = calculate_implied_prob_from_line(line_for_ip, pred_assists, std_dev=pred_assists*0.30) if show_ip else None
-        
-        over_str = f"{over_odds:+d}" if over_odds is not None else "N/A"
-        under_str = f"{under_odds:+d}" if under_odds is not None else "N/A"
-        
-        rows.append({
-            "Player": player_name, 
-            "Team": r['team'], 
-            "Opponent": r['opponent'], 
-            "Stat": "assists", 
-            "Line": line_assists_rounded,  # Show rounded line
-            "Pred": pred_assists, 
-            "Value": r['assist_value'],
-            "IP": f"{ip_assists:.1%}" if ip_assists is not None else None,
-            "Over Odds": over_str if show_odds else None,
-            "Under Odds": under_str if show_odds else None,
-            "Book": book if show_odds else None
-        })
+        # Only add to rows if we have BOTH over and under odds
+        if over_odds is not None and under_odds is not None:
+            line_for_ip = sportsbook_line if sportsbook_line is not None else line_assists_rounded
+            ip_assists = calculate_implied_prob_from_line(line_for_ip, pred_assists, std_dev=pred_assists*0.30) if show_ip else None
+            
+            over_str = f"{over_odds:+d}"
+            under_str = f"{under_odds:+d}"
+            
+            rows.append({
+                "Player": player_name, 
+                "Team": r['team'], 
+                "Opponent": r['opponent'], 
+                "Stat": "assists", 
+                "Line": line_assists_rounded,  # Show rounded line
+                "Pred": pred_assists, 
+                "Value": r['assist_value'],
+                "IP": f"{ip_assists:.1%}" if ip_assists is not None else None,
+                "Over Odds": over_str if show_odds else None,
+                "Under Odds": under_str if show_odds else None,
+                "Book": book if show_odds else None
+            })
     
     lines_df = pd.DataFrame(rows)
     
