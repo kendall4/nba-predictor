@@ -48,6 +48,11 @@ class OddsAggregator:
         """
         Get player props for NBA games
         
+        IMPORTANT: Per The Odds API docs, player props must be accessed per-event using
+        the /events/{eventId}/odds endpoint. This method:
+        1. If event_id provided: queries that event directly
+        2. If event_id is None: first gets today's event IDs, then queries each event
+        
         Args:
             sport: 'basketball_nba'
             event_id: Specific game ID (optional, gets all today's games if None)
@@ -61,25 +66,95 @@ class OddsAggregator:
                 print("⚠️  ODDS_API_KEY not set")
             return None
         
+        # Player props markets to request (per API docs)
+        player_prop_markets = [
+            'player_points',
+            'player_rebounds', 
+            'player_assists',
+            'player_threes',
+            'player_points_rebounds_assists'
+        ]
+        
+        # If event_id provided, query that event directly
+        if event_id:
+            return self._get_player_props_for_event(sport, event_id, player_prop_markets, debug)
+        
+        # Otherwise, get all today's events first, then query each
+        if debug:
+            print("📅 Getting today's NBA events...")
+        
+        event_ids = self._get_todays_event_ids(sport, debug)
+        if not event_ids:
+            if debug:
+                print("⚠️  No events found for today")
+            return pd.DataFrame()
+        
+        if debug:
+            print(f"✅ Found {len(event_ids)} events. Fetching player props for each...")
+        
+        # Query each event for player props
+        all_props = []
+        for event_id in event_ids:
+            event_props = self._get_player_props_for_event(sport, event_id, player_prop_markets, debug)
+            if event_props is not None and len(event_props) > 0:
+                all_props.append(event_props)
+        
+        if not all_props:
+            if debug:
+                print("⚠️  No player props found for any events")
+            return pd.DataFrame()
+        
+        # Combine all props
+        result = pd.concat(all_props, ignore_index=True)
+        if debug:
+            print(f"✅ Total props found: {len(result)}")
+        return result
+    
+    def _get_todays_event_ids(self, sport='basketball_nba', debug: bool = False) -> List[str]:
+        """Get list of event IDs for today's games"""
+        url = f"{self.base_url}/sports/{sport}/odds"
+        params = {
+            'api_key': self.api_key,
+            'regions': ','.join(self.regions),
+            'markets': 'h2h',  # Use a simple market to get event list
+            'bookmakers': 'draftkings',  # Just need one bookmaker to get events
+            'oddsFormat': 'american'
+        }
+        
+        try:
+            response = requests.get(url, params=params, timeout=20)
+            if response.status_code != 200:
+                if debug:
+                    print(f"❌ Failed to get events: {response.status_code}")
+                return []
+            
+            events = response.json()
+            event_ids = [event.get('id') for event in events if event.get('id')]
+            
+            if debug:
+                print(f"📋 Found {len(event_ids)} events: {[e.get('home_team') + ' vs ' + e.get('away_team') for e in events[:3]]}...")
+            
+            return event_ids
+        except Exception as e:
+            if debug:
+                print(f"❌ Error getting events: {e}")
+            return []
+    
+    def _get_player_props_for_event(self, sport: str, event_id: str, markets: List[str], debug: bool = False):
+        """Get player props for a specific event"""
+        url = f"{self.base_url}/sports/{sport}/events/{event_id}/odds"
+        
         max_retries = 2
         for attempt in range(max_retries + 1):
             try:
-                if event_id:
-                    url = f"{self.base_url}/sports/{sport}/events/{event_id}/odds"
-                else:
-                    url = f"{self.base_url}/sports/{sport}/odds"
-                
-                # Per official API docs: player_props is general, or use specific markets:
-                # player_points, player_rebounds, player_assists, etc.
-                # Using 'player_props' gets all player props in one request
                 # IMPORTANT: Parameter name is 'api_key' not 'apiKey' (per official samples)
                 params = {
-                    'api_key': self.api_key,  # Fixed: use 'api_key' not 'apiKey'
+                    'api_key': self.api_key,
                     'regions': ','.join(self.regions),
-                    'markets': 'player_props',  # General market (can also use player_points, player_rebounds, etc.)
+                    'markets': ','.join(markets),  # Request multiple player prop markets
                     'bookmakers': ','.join(self.books[:5]),  # Limit to avoid rate limits
-                    'oddsFormat': 'american',  # Use American odds format (per API docs)
-                    'dateFormat': 'iso'  # Add date format for consistency
+                    'oddsFormat': 'american',
+                    'dateFormat': 'iso'
                 }
                 
                 response = requests.get(url, params=params, timeout=20)
@@ -88,7 +163,7 @@ class OddsAggregator:
                 if response.status_code != 200:
                     error_msg = f"API returned status {response.status_code}"
                     if debug:
-                        error_msg += f": {response.text}"
+                        error_msg += f": {response.text[:200]}"
                     if response.status_code == 401:
                         if debug:
                             print(f"❌ Authentication error: Invalid API key")
@@ -97,9 +172,13 @@ class OddsAggregator:
                         if debug:
                             print(f"⚠️  Rate limit exceeded")
                         return pd.DataFrame()  # Return empty, don't fail completely
+                    elif response.status_code == 422:
+                        if debug:
+                            print(f"⚠️  Market not available for this event: {response.text[:200]}")
+                        return pd.DataFrame()  # Some events may not have player props
                     elif debug:
                         print(f"❌ API Error: {error_msg}")
-                    return None
+                    return pd.DataFrame()
                 
                 response.raise_for_status()
                 
@@ -110,7 +189,9 @@ class OddsAggregator:
                 if remaining != 'unknown' and debug:
                     print(f"📊 API Usage: {used} used, {remaining} remaining (last request cost: {last_cost})")
                 
-                data = response.json()
+                # For event-specific endpoint, response is a single event object, not a list
+                event_data = response.json()
+                data = [event_data]  # Wrap in list for consistent processing
                 break  # Success, exit retry loop
                 
             except requests.exceptions.Timeout as e:
@@ -152,6 +233,7 @@ class OddsAggregator:
             return pd.DataFrame()
         
         try:
+            # data is now a list with one event (from event-specific endpoint)
             if debug:
                 print(f"🔍 API Response: {len(data)} events")
                 if len(data) > 0:
