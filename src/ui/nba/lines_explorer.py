@@ -7,12 +7,40 @@ from src.services.odds_aggregator import OddsAggregator
 
 def round_to_sportsbook_line(line):
     """
-    Round line to sportsbook format (whole or .5)
+    Round line to sportsbook format (whole number or .5)
+    
+    Rounds to nearest 0.5 increment using standard rounding:
+    - 0.0-0.24 -> round down to .0
+    - 0.25-0.74 -> round to .5
+    - 0.75-0.99 -> round up to next whole number
+    
+    Examples:
+        24.3 -> 24.5 (0.3 is in 0.25-0.74 range)
+        24.7 -> 25.0 (0.7 is in 0.75-0.99 range)
+        24.2 -> 24.0 (0.2 is in 0.0-0.24 range)
+        24.5 -> 24.5 (already .5)
     """
     if pd.isna(line):
         return line
-    rounded = round(line * 2) / 2  # Round to nearest 0.5
-    return rounded
+    
+    # Get the integer and decimal parts
+    integer_part = int(line)
+    decimal_part = abs(line - integer_part)  # Handle negative numbers
+    
+    # Determine rounding based on decimal part
+    # Prefer whole numbers when possible, use .5 as fallback
+    # - 0.00-0.49 -> round to whole number (.0)
+    # - 0.50-0.74 -> round to .5
+    # - 0.75-0.99 -> round up to next whole number
+    if decimal_part < 0.5:
+        # Round down to whole number (prefer whole numbers)
+        return float(integer_part) if line >= 0 else float(integer_part - 1)
+    elif decimal_part < 0.75:
+        # Round to .5 (only when clearly in middle range)
+        return float(integer_part) + (0.5 if line >= 0 else -0.5)
+    else:
+        # Round up to next whole number
+        return float(integer_part) + (1.0 if line >= 0 else -1.0)
 
 def find_matching_odds(player_name, stat, target_line, odds_df, allowed_books=None):
     """
@@ -110,25 +138,55 @@ def find_matching_odds(player_name, stat, target_line, odds_df, allowed_books=No
     
     return over_odds, under_odds, book, sportsbook_line
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_data(ttl=43200)  # Cache for 12 hours (once per day - saves API quota)
 def _fetch_cached_odds_no_debug():
     """Cached function to fetch odds (without debug for caching)"""
     aggregator = OddsAggregator()
+    
+    # First try disk cache
+    cached_odds = aggregator.load_cached_odds()
+    if cached_odds is not None and len(cached_odds) > 0:
+        return cached_odds
+    
+    # No cache, try API
     if aggregator.api_key:
-        return aggregator.get_player_props(debug=False)
+        props = aggregator.get_player_props(debug=False)
+        # If quota exceeded, return cached data if available
+        if props == "QUOTA_EXCEEDED":
+            cached_odds = aggregator.load_cached_odds()
+            if cached_odds is not None and len(cached_odds) > 0:
+                return cached_odds
+        return props
     return None
 
 def _fetch_cached_odds(debug=False):
     """Fetch odds with optional debug output to Streamlit"""
+    aggregator = OddsAggregator()
+    
+    # First, try to load from disk cache (even if quota exceeded)
+    cached_odds = aggregator.load_cached_odds()
+    if cached_odds is not None and len(cached_odds) > 0:
+        if debug:
+            st.info(f"💾 Using cached odds from disk ({len(cached_odds)} props)")
+        # Return cached data, but don't use QUOTA_EXCEEDED marker
+        return cached_odds
+    
+    # No cache available, try API
     if not debug:
         # Use cached version for non-debug mode
         return _fetch_cached_odds_no_debug()
     else:
         # Bypass cache for debug mode to see fresh API calls
         try:
-            aggregator = OddsAggregator()
             if aggregator.api_key:
                 props = aggregator.get_player_props(debug=debug)
+                if props == "QUOTA_EXCEEDED":
+                    # If quota exceeded, try to use disk cache
+                    cached_odds = aggregator.load_cached_odds()
+                    if cached_odds is not None and len(cached_odds) > 0:
+                        st.warning("⚠️ API quota exceeded, but found cached odds from earlier today")
+                        return cached_odds
+                    return props
                 if debug and props is not None:
                     if len(props) == 0:
                         st.warning("⚠️ API returned empty DataFrame - no player props found")
@@ -163,7 +221,16 @@ def render(predictions):
         ip_type = None
     
     # Option to fetch and show actual betting odds
-    show_odds = st.checkbox("Show Live Betting Odds", value=True, help="Fetch real odds from sportsbooks (requires ODDS_API_KEY)")
+    show_odds = st.checkbox("Show Live Betting Odds", value=True, help="Fetch real odds from sportsbooks (requires ODDS_API_KEY). Cached for 12 hours to save API quota.")
+    
+    # Manual refresh button (optional - for when you want fresh odds)
+    if show_odds:
+        with st.expander("🔄 Manual Odds Refresh", expanded=False):
+            st.caption("Odds are cached for 12 hours. Click to force refresh (uses API quota).")
+            if st.button("🔄 Refresh Odds Now", help="Bypass cache and fetch fresh odds"):
+                # Clear cache for this function
+                _fetch_cached_odds_no_debug.clear()
+                st.rerun()
     
     # Debug mode for odds API
     debug_odds = st.checkbox("🐛 Debug Odds API", value=False, help="Show detailed API response and error information")
@@ -186,7 +253,30 @@ def render(predictions):
                     if debug_odds:
                         st.info("🔍 Debug Mode: Checking API response...")
                     
-                    if odds_data is not None and len(odds_data) > 0:
+                    if odds_data == "QUOTA_EXCEEDED":
+                        # Quota exceeded error - try to load from disk cache
+                        aggregator = OddsAggregator()
+                        cached_odds = aggregator.load_cached_odds()
+                        if cached_odds is not None and len(cached_odds) > 0:
+                            st.warning("⚠️ **API Quota Exceeded**, but using cached odds from earlier today")
+                            odds_data = cached_odds  # Use cached data instead
+                        else:
+                            st.error("❌ **API Quota Exceeded**: You've used all your API credits for this month.")
+                            st.info("💡 **How to fix:**\n"
+                                  "- Check your usage at https://the-odds-api.com/\n"
+                                  "- Free tier: 500 requests/month\n"
+                                  "- Upgrade your plan or wait for quota reset\n"
+                                  "- Lines will still show without live odds (turn off 'Show Live Betting Odds')")
+                            allowed_books = None
+                    elif odds_data is None:
+                        # None means authentication error (401)
+                        st.error("❌ **Authentication Error**: Invalid API key. Please check your ODDS_API_KEY.")
+                        st.info("💡 **How to fix:**\n"
+                              "- Verify your API key at https://the-odds-api.com/\n"
+                              "- Update your `.env` file or Streamlit secrets\n"
+                              "- Make sure the key is active and not expired")
+                        allowed_books = None
+                    elif len(odds_data) > 0:
                         st.success(f"✅ Found odds for {odds_data['player'].nunique()} players ({len(odds_data)} total props)")
                         # Debug: show sample of stats found
                         if 'stat' in odds_data.columns:
@@ -218,7 +308,8 @@ def render(predictions):
                                         st.warning("⚠️ No books selected - showing all available books")
                                         allowed_books = actual_books
                                         st.session_state[filter_key] = actual_books
-                    elif odds_data is not None and len(odds_data) == 0:
+                    else:
+                        # Empty DataFrame means no events/props found
                         st.warning("⚠️ No odds found. API returned empty response.")
                         if debug_odds:
                             st.info("💡 This could mean:\n"
@@ -226,17 +317,6 @@ def render(predictions):
                                   "- Player props not available yet\n"
                                   "- Market 'player_props' not supported by selected books\n"
                                   "- Check console/terminal for detailed API logs")
-                        # Clear book filter if no data
-                        allowed_books = None
-                    else:
-                        # odds_data is None - API error
-                        st.warning("⚠️ No odds found. API returned error or no response.")
-                        if debug_odds:
-                            st.info("💡 Possible issues:\n"
-                                  "- Invalid API key\n"
-                                  "- Rate limit exceeded\n"
-                                  "- Network error\n"
-                                  "- Check console/terminal for detailed error logs")
                         # Clear book filter if no data
                         allowed_books = None
             else:
@@ -263,46 +343,81 @@ def render(predictions):
         line_points_rounded = round_to_sportsbook_line(line_points)
         
         # Get odds if available (returns sportsbook_line too)
-        # Only show lines that have BOTH over AND under odds
-        over_odds, under_odds, book, sportsbook_line = find_matching_odds(player_name, 'points', line_points, odds_data, allowed_books) if show_odds and odds_data is not None else (None, None, None, None)
+        # Only show lines that have BOTH over AND under odds (if show_odds is enabled AND odds_data is valid DataFrame)
+        if show_odds and odds_data is not None and isinstance(odds_data, pd.DataFrame) and len(odds_data) > 0:
+            over_odds, under_odds, book, sportsbook_line = find_matching_odds(player_name, 'points', line_points, odds_data, allowed_books)
+        else:
+            over_odds, under_odds, book, sportsbook_line = (None, None, None, None)
         
-        # Only add to rows if we have BOTH over and under odds
-        if over_odds is not None and under_odds is not None:
-            # Calculate Model IP (model prediction vs sportsbook line)
-            line_for_ip = sportsbook_line if sportsbook_line is not None else line_points_rounded
+        # Only add to rows if we have BOTH over and under odds (when show_odds is enabled)
+        # OR if show_odds is disabled, show all lines regardless
+        if show_odds:
+            # When odds are enabled, only show lines with both over and under
+            if over_odds is not None and under_odds is not None:
+                # Calculate Model IP (model prediction vs sportsbook line)
+                line_for_ip = sportsbook_line if sportsbook_line is not None else line_points_rounded
+                model_ip = calculate_implied_prob_from_line(line_for_ip, pred_points) if show_ip else None
+            
+                # Calculate Book IP (from over odds - this is what the book thinks for OVER)
+                book_ip_over = american_to_implied_prob(over_odds) if show_ip and over_odds is not None else None
+                
+                # Format IP based on user selection
+                if show_ip and ip_type:
+                    if ip_type == "Model IP (prediction vs line)":
+                        ip_display = f"{model_ip:.1%}" if model_ip is not None else None
+                    elif ip_type == "Book IP (from odds)":
+                        ip_display = f"{book_ip_over:.1%}" if book_ip_over is not None else None
+                    else:  # Both
+                        model_ip_str = f"{model_ip:.1%}" if model_ip is not None else "N/A"
+                        book_ip_str = f"{book_ip_over:.1%}" if book_ip_over is not None else "N/A"
+                        ip_display = f"{model_ip_str} / {book_ip_str}"
+                else:
+                    ip_display = None
+                
+                over_str = f"{over_odds:+d}"
+                under_str = f"{under_odds:+d}"
+                
+                rows.append({
+                    "Player": player_name, 
+                    "Team": r['team'], 
+                    "Opponent": r['opponent'], 
+                    "Stat": "points", 
+                    "Line": line_points_rounded,  # Show rounded line
+                    "Pred": pred_points, 
+                    "Value": r['point_value'],
+                    "IP": ip_display,
+                    "Over Odds": over_str if show_odds else None,
+                    "Under Odds": under_str if show_odds else None,
+                    "Book": book if show_odds else None
+                })
+        else:
+            # show_odds is False - show all lines without odds requirement
+            # Calculate Model IP (model prediction vs line)
+            line_for_ip = line_points_rounded
             model_ip = calculate_implied_prob_from_line(line_for_ip, pred_points) if show_ip else None
             
-            # Calculate Book IP (from over odds - this is what the book thinks for OVER)
-            book_ip_over = american_to_implied_prob(over_odds) if show_ip and over_odds is not None else None
-            
-            # Format IP based on user selection
-            if show_ip and ip_type:
+            # Format IP based on user selection (only Model IP available when odds disabled)
+            if show_ip and ip_type and ip_type != "Book IP (from odds)":
                 if ip_type == "Model IP (prediction vs line)":
                     ip_display = f"{model_ip:.1%}" if model_ip is not None else None
-                elif ip_type == "Book IP (from odds)":
-                    ip_display = f"{book_ip_over:.1%}" if book_ip_over is not None else None
-                else:  # Both
+                else:  # Both - but only show model IP when odds disabled
                     model_ip_str = f"{model_ip:.1%}" if model_ip is not None else "N/A"
-                    book_ip_str = f"{book_ip_over:.1%}" if book_ip_over is not None else "N/A"
-                    ip_display = f"{model_ip_str} / {book_ip_str}"
+                    ip_display = f"{model_ip_str} / N/A"
             else:
                 ip_display = None
-            
-            over_str = f"{over_odds:+d}"
-            under_str = f"{under_odds:+d}"
             
             rows.append({
                 "Player": player_name, 
                 "Team": r['team'], 
                 "Opponent": r['opponent'], 
                 "Stat": "points", 
-                "Line": line_points_rounded,  # Show rounded line
+                "Line": line_points_rounded,
                 "Pred": pred_points, 
                 "Value": r['point_value'],
                 "IP": ip_display,
-                "Over Odds": over_str if show_odds else None,
-                "Under Odds": under_str if show_odds else None,
-                "Book": book if show_odds else None
+                "Over Odds": None,
+                "Under Odds": None,
+                "Book": None
             })
         
         # Rebounds
@@ -310,42 +425,73 @@ def render(predictions):
         line_rebounds = r['line_rebounds']
         line_rebounds_rounded = round_to_sportsbook_line(line_rebounds)
         
-        over_odds, under_odds, book, sportsbook_line = find_matching_odds(player_name, 'rebounds', line_rebounds, odds_data, allowed_books) if show_odds and odds_data is not None else (None, None, None, None)
+        if show_odds and odds_data is not None and isinstance(odds_data, pd.DataFrame) and len(odds_data) > 0:
+            over_odds, under_odds, book, sportsbook_line = find_matching_odds(player_name, 'rebounds', line_rebounds, odds_data, allowed_books)
+        else:
+            over_odds, under_odds, book, sportsbook_line = (None, None, None, None)
         
-        # Only add to rows if we have BOTH over and under odds
-        if over_odds is not None and under_odds is not None:
-            line_for_ip = sportsbook_line if sportsbook_line is not None else line_rebounds_rounded
+        if show_odds:
+            # Only add to rows if we have BOTH over and under odds
+            if over_odds is not None and under_odds is not None:
+                line_for_ip = sportsbook_line if sportsbook_line is not None else line_rebounds_rounded
+                model_ip = calculate_implied_prob_from_line(line_for_ip, pred_rebounds, std_dev=pred_rebounds*0.25) if show_ip else None
+                book_ip_over = american_to_implied_prob(over_odds) if show_ip and over_odds is not None else None
+                
+                # Format IP based on user selection
+                if show_ip and ip_type:
+                    if ip_type == "Model IP (prediction vs line)":
+                        ip_display = f"{model_ip:.1%}" if model_ip is not None else None
+                    elif ip_type == "Book IP (from odds)":
+                        ip_display = f"{book_ip_over:.1%}" if book_ip_over is not None else None
+                    else:  # Both
+                        model_ip_str = f"{model_ip:.1%}" if model_ip is not None else "N/A"
+                        book_ip_str = f"{book_ip_over:.1%}" if book_ip_over is not None else "N/A"
+                        ip_display = f"{model_ip_str} / {book_ip_str}"
+                else:
+                    ip_display = None
+                
+                over_str = f"{over_odds:+d}"
+                under_str = f"{under_odds:+d}"
+                
+                rows.append({
+                    "Player": player_name, 
+                    "Team": r['team'], 
+                    "Opponent": r['opponent'], 
+                    "Stat": "rebounds", 
+                    "Line": line_rebounds_rounded,  # Show rounded line
+                    "Pred": pred_rebounds, 
+                    "Value": r['rebound_value'],
+                    "IP": ip_display,
+                    "Over Odds": over_str if show_odds else None,
+                    "Under Odds": under_str if show_odds else None,
+                    "Book": book if show_odds else None
+                })
+        else:
+            # show_odds is False - show all lines without odds requirement
+            line_for_ip = line_rebounds_rounded
             model_ip = calculate_implied_prob_from_line(line_for_ip, pred_rebounds, std_dev=pred_rebounds*0.25) if show_ip else None
-            book_ip_over = american_to_implied_prob(over_odds) if show_ip and over_odds is not None else None
             
-            # Format IP based on user selection
-            if show_ip and ip_type:
+            if show_ip and ip_type and ip_type != "Book IP (from odds)":
                 if ip_type == "Model IP (prediction vs line)":
                     ip_display = f"{model_ip:.1%}" if model_ip is not None else None
-                elif ip_type == "Book IP (from odds)":
-                    ip_display = f"{book_ip_over:.1%}" if book_ip_over is not None else None
-                else:  # Both
+                else:
                     model_ip_str = f"{model_ip:.1%}" if model_ip is not None else "N/A"
-                    book_ip_str = f"{book_ip_over:.1%}" if book_ip_over is not None else "N/A"
-                    ip_display = f"{model_ip_str} / {book_ip_str}"
+                    ip_display = f"{model_ip_str} / N/A"
             else:
                 ip_display = None
-            
-            over_str = f"{over_odds:+d}"
-            under_str = f"{under_odds:+d}"
             
             rows.append({
                 "Player": player_name, 
                 "Team": r['team'], 
                 "Opponent": r['opponent'], 
                 "Stat": "rebounds", 
-                "Line": line_rebounds_rounded,  # Show rounded line
+                "Line": line_rebounds_rounded,
                 "Pred": pred_rebounds, 
                 "Value": r['rebound_value'],
                 "IP": ip_display,
-                "Over Odds": over_str if show_odds else None,
-                "Under Odds": under_str if show_odds else None,
-                "Book": book if show_odds else None
+                "Over Odds": None,
+                "Under Odds": None,
+                "Book": None
             })
         
         # Assists
@@ -353,42 +499,73 @@ def render(predictions):
         line_assists = r['line_assists']
         line_assists_rounded = round_to_sportsbook_line(line_assists)
         
-        over_odds, under_odds, book, sportsbook_line = find_matching_odds(player_name, 'assists', line_assists, odds_data, allowed_books) if show_odds and odds_data is not None else (None, None, None, None)
+        if show_odds and odds_data is not None and isinstance(odds_data, pd.DataFrame) and len(odds_data) > 0:
+            over_odds, under_odds, book, sportsbook_line = find_matching_odds(player_name, 'assists', line_assists, odds_data, allowed_books)
+        else:
+            over_odds, under_odds, book, sportsbook_line = (None, None, None, None)
         
-        # Only add to rows if we have BOTH over and under odds
-        if over_odds is not None and under_odds is not None:
-            line_for_ip = sportsbook_line if sportsbook_line is not None else line_assists_rounded
-            model_ip = calculate_implied_prob_from_line(line_for_ip, pred_assists, std_dev=pred_assists*0.30) if show_ip else None
-            book_ip_over = american_to_implied_prob(over_odds) if show_ip and over_odds is not None else None
+        if show_odds:
+            # Only add to rows if we have BOTH over and under odds
+            if over_odds is not None and under_odds is not None:
+                line_for_ip = sportsbook_line if sportsbook_line is not None else line_assists_rounded
+                model_ip = calculate_implied_prob_from_line(line_for_ip, pred_assists, std_dev=pred_assists*0.30) if show_ip else None
+                book_ip_over = american_to_implied_prob(over_odds) if show_ip and over_odds is not None else None
+                
+                # Format IP based on user selection
+                if show_ip and ip_type:
+                    if ip_type == "Model IP (prediction vs line)":
+                        ip_display = f"{model_ip:.1%}" if model_ip is not None else None
+                    elif ip_type == "Book IP (from odds)":
+                        ip_display = f"{book_ip_over:.1%}" if book_ip_over is not None else None
+                    else:  # Both
+                        model_ip_str = f"{model_ip:.1%}" if model_ip is not None else "N/A"
+                        book_ip_str = f"{book_ip_over:.1%}" if book_ip_over is not None else "N/A"
+                        ip_display = f"{model_ip_str} / {book_ip_str}"
+                else:
+                    ip_display = None
+                
+                over_str = f"{over_odds:+d}"
+                under_str = f"{under_odds:+d}"
+                
+                rows.append({
+                    "Player": player_name, 
+                    "Team": r['team'], 
+                    "Opponent": r['opponent'], 
+                    "Stat": "assists", 
+                    "Line": line_assists_rounded,  # Show rounded line
+                    "Pred": pred_assists, 
+                    "Value": r['assist_value'],
+                    "IP": ip_display,
+                    "Over Odds": over_str if show_odds else None,
+                    "Under Odds": under_str if show_odds else None,
+                    "Book": book if show_odds else None
+                })
+        else:
+            # show_odds is False - show all lines without odds requirement
+            line_for_ip = line_assists_rounded
+            model_ip = calculate_implied_prob_from_line(line_for_ip, pred_assists, std_dev=pred_assists*0.25) if show_ip else None
             
-            # Format IP based on user selection
-            if show_ip and ip_type:
+            if show_ip and ip_type and ip_type != "Book IP (from odds)":
                 if ip_type == "Model IP (prediction vs line)":
                     ip_display = f"{model_ip:.1%}" if model_ip is not None else None
-                elif ip_type == "Book IP (from odds)":
-                    ip_display = f"{book_ip_over:.1%}" if book_ip_over is not None else None
-                else:  # Both
+                else:
                     model_ip_str = f"{model_ip:.1%}" if model_ip is not None else "N/A"
-                    book_ip_str = f"{book_ip_over:.1%}" if book_ip_over is not None else "N/A"
-                    ip_display = f"{model_ip_str} / {book_ip_str}"
+                    ip_display = f"{model_ip_str} / N/A"
             else:
                 ip_display = None
-            
-            over_str = f"{over_odds:+d}"
-            under_str = f"{under_odds:+d}"
             
             rows.append({
                 "Player": player_name, 
                 "Team": r['team'], 
                 "Opponent": r['opponent'], 
                 "Stat": "assists", 
-                "Line": line_assists_rounded,  # Show rounded line
+                "Line": line_assists_rounded,
                 "Pred": pred_assists, 
                 "Value": r['assist_value'],
                 "IP": ip_display,
-                "Over Odds": over_str if show_odds else None,
-                "Under Odds": under_str if show_odds else None,
-                "Book": book if show_odds else None
+                "Over Odds": None,
+                "Under Odds": None,
+                "Book": None
             })
     
     lines_df = pd.DataFrame(rows)

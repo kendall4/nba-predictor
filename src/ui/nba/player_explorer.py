@@ -4,6 +4,7 @@ from src.analysis.hot_hand_tracker import HotHandTracker
 from src.analysis.alt_line_optimizer import AltLineOptimizer
 from src.services.injury_tracker import InjuryTracker
 from src.ui.components.player_detail_view import render_player_detail
+from src.ui.nba.lines_explorer import round_to_sportsbook_line
 
 def render(predictions):
     st.header("🧑‍💻 Player Explorer")
@@ -27,12 +28,8 @@ def render(predictions):
         if stat == 'points': base_line = float(row.iloc[0]['line_points'])
         elif stat == 'rebounds': base_line = float(row.iloc[0]['line_rebounds'])
         elif stat == 'assists': base_line = float(row.iloc[0]['line_assists'])
-    if stat == 'threes' and logs is not None and 'FG3M' in logs.columns:
-        base_line = float(max(2.5, logs['FG3M'].head(recent_n).mean()))
-    line_value = st.number_input("Main line", min_value=0.0, max_value=100.0, value=float(base_line), step=0.5)
-    main_odds = st.number_input("Main line odds (American)", value=-110, step=5)
-
-    # Get logs for EV calculation
+    
+    # Get logs for threes calculation
     logs = None
     try:
         logs = tracker.get_player_gamelog(selected_player, season='2025-26')
@@ -41,6 +38,15 @@ def render(predictions):
     except:
         pass
     
+    if stat == 'threes' and logs is not None and 'FG3M' in logs.columns:
+        base_line = float(max(2.5, logs['FG3M'].head(10).mean()))
+    
+    # Round base_line to sportsbook format (whole number or .5)
+    base_line = round_to_sportsbook_line(base_line)
+    
+    line_value = st.number_input("Main line", min_value=0.0, max_value=100.0, value=float(base_line), step=0.5)
+    main_odds = st.number_input("Main line odds (American)", value=-110, step=5)
+
     pred_val = None
     if len(row) == 1:
         if stat == 'points' and 'pred_points' in row.columns:
@@ -56,10 +62,13 @@ def render(predictions):
             pred_val = float(logs[sc].head(10).mean()) if len(logs) > 0 else None
 
     if pred_val is not None:
+        # Ensure line_value is rounded to sportsbook format (whole number or .5)
+        line_value = round_to_sportsbook_line(line_value)
+        
         optimizer = AltLineOptimizer()
         prob_over = optimizer.calculate_probability_over(pred_val, line_value)
         ev_main = optimizer.calculate_ev(prob_over, int(main_odds))
-        st.write(f"Model estimate: {pred_val:.2f} {stat} | EV {ev_main:+.1%} (P(over) {prob_over:.1%})")
+        st.write(f"Model estimate: {pred_val:.2f} {stat} | Line: {line_value} | EV {ev_main:+.1%} (P(over) {prob_over:.1%})")
 
     st.markdown("---")
     st.subheader("📤 Upload Alt Lines CSV (optional)")
@@ -75,8 +84,16 @@ def render(predictions):
                 prediction=pred_val,
                 alt_lines=odds_df[['line','over','under']].to_dict('records')
             )
-            st.write(f"Best: {result['best_direction']} {result['best_line']} at {int(result['best_odds']):+} | EV {result['best_ev']:+.1%}")
-            st.dataframe(result['all_lines'], use_container_width=True)
+            # Round best line to sportsbook format
+            best_line_rounded = round_to_sportsbook_line(result['best_line'])
+            st.write(f"Best: {result['best_direction']} {best_line_rounded} at {int(result['best_odds']):+} | EV {result['best_ev']:+.1%}")
+            
+            # Round all lines in the dataframe before displaying
+            if 'all_lines' in result and result['all_lines'] is not None:
+                display_df = result['all_lines'].copy()
+                if 'line' in display_df.columns:
+                    display_df['line'] = display_df['line'].apply(round_to_sportsbook_line)
+                st.dataframe(display_df, use_container_width=True)
         else:
             st.error("CSV must contain columns: line, over, under")
 

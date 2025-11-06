@@ -292,4 +292,230 @@ class MobileStyleVisualizer:
             'average': recent[stat].mean(),
             'median': recent[stat].median()
         }
+    
+    def create_scatter_plot(self, player_name: str, stat_x: str, stat_y: str,
+                           stat_x_label: str, stat_y_label: str,
+                           line_x: Optional[float] = None, line_y: Optional[float] = None,
+                           n_games: int = 10, opponent: Optional[str] = None) -> Optional[go.Figure]:
+        """
+        Create a scatter plot comparing two stats
+        
+        Args:
+            player_name: Player name
+            stat_x: X-axis stat column ('PTS', 'REB', 'AST', etc.)
+            stat_x_label: Display label for X-axis ('Points', 'Rebounds', etc.)
+            stat_y: Y-axis stat column ('PTS', 'REB', 'AST', etc.)
+            stat_y_label: Display label for Y-axis ('Points', 'Rebounds', etc.)
+            line_x: Optional betting line for X-axis stat (for coloring)
+            line_y: Optional betting line for Y-axis stat (for coloring)
+            n_games: Number of games to show
+            opponent: Optional opponent for H2H filtering
+        
+        Returns:
+            Plotly figure
+        """
+        # Get game log
+        game_log = self.hot_hand_tracker.get_player_gamelog(player_name, season='2025-26')
+        if game_log is None or len(game_log) == 0:
+            game_log = self.hot_hand_tracker.get_player_gamelog(player_name, season='2024-25')
+        
+        if game_log is None or len(game_log) == 0:
+            return None
+        
+        # Filter by opponent if H2H
+        if opponent:
+            def extract_opponent(matchup_str):
+                if pd.isna(matchup_str):
+                    return ''
+                matchup = str(matchup_str).upper()
+                parts = matchup.split()
+                if len(parts) >= 2:
+                    return parts[-1]
+                return ''
+            
+            if 'MATCHUP' in game_log.columns:
+                game_log['OPP'] = game_log['MATCHUP'].apply(extract_opponent)
+                game_log = game_log[game_log['OPP'] == opponent.upper()].copy()
+        
+        # Get recent games
+        game_log = game_log.head(n_games)
+        
+        # Convert stats to numeric
+        if stat_x not in game_log.columns or stat_y not in game_log.columns:
+            return None
+        
+        game_log[stat_x] = pd.to_numeric(game_log[stat_x], errors='coerce')
+        game_log[stat_y] = pd.to_numeric(game_log[stat_y], errors='coerce')
+        
+        # Remove NaN values
+        game_log = game_log[(game_log[stat_x].notna()) & (game_log[stat_y].notna())].copy()
+        
+        if len(game_log) == 0:
+            return None
+        
+        # Get values
+        x_values = game_log[stat_x].tolist()
+        y_values = game_log[stat_y].tolist()
+        
+        # Create labels for hover
+        hover_texts = []
+        for _, row in game_log.iterrows():
+            parts = []
+            
+            # Date
+            if 'GAME_DATE' in row:
+                try:
+                    date_str = pd.to_datetime(row['GAME_DATE']).strftime('%m/%d/%Y')
+                    parts.append(f"Date: {date_str}")
+                except:
+                    pass
+            
+            # Opponent
+            if 'MATCHUP' in row:
+                matchup = str(row['MATCHUP'])
+                if '@' in matchup or 'vs' in matchup or 'VS' in matchup:
+                    parts.append(f"Matchup: {matchup}")
+            
+            # Stats
+            parts.append(f"{stat_x_label}: {row[stat_x]:.1f}")
+            parts.append(f"{stat_y_label}: {row[stat_y]:.1f}")
+            
+            hover_texts.append('<br>'.join(parts))
+        
+        # Determine colors based on lines
+        if line_x is not None and line_y is not None:
+            # Color by both: green if both over, pink if both under, yellow if mixed
+            colors = []
+            for x, y in zip(x_values, y_values):
+                x_over = x > line_x
+                y_over = y > line_y
+                if x_over and y_over:
+                    colors.append('#4ade80')  # Green - both over
+                elif not x_over and not y_over:
+                    colors.append('#f472b6')  # Pink - both under
+                else:
+                    colors.append('#fbbf24')  # Yellow - mixed
+        elif line_x is not None:
+            # Color by X-axis line only
+            colors = ['#4ade80' if x > line_x else '#f472b6' for x in x_values]
+        elif line_y is not None:
+            # Color by Y-axis line only
+            colors = ['#4ade80' if y > line_y else '#f472b6' for y in y_values]
+        else:
+            # Default color
+            colors = ['#00e5b0'] * len(x_values)
+        
+        # Create scatter plot
+        fig = go.Figure()
+        
+        fig.add_trace(go.Scatter(
+            x=x_values,
+            y=y_values,
+            mode='markers+text',
+            marker=dict(
+                size=12,
+                color=colors,
+                line=dict(width=2, color='white'),
+                opacity=0.8
+            ),
+            text=[f"{i+1}" for i in range(len(x_values))],  # Game number
+            textposition='middle center',
+            textfont=dict(size=10, color='black', family='Arial Black'),
+            hovertemplate='%{text}<extra></extra>',
+            customdata=hover_texts,
+            name='Games'
+        ))
+        
+        # Add reference lines if betting lines provided
+        if line_x is not None:
+            fig.add_vline(
+                x=line_x,
+                line_dash="dash",
+                line_color="white",
+                line_width=2,
+                annotation_text=f"{stat_x_label} Line: {line_x}",
+                annotation_position="top",
+                annotation_font_size=11,
+                annotation_font_color="white"
+            )
+        
+        if line_y is not None:
+            fig.add_hline(
+                y=line_y,
+                line_dash="dash",
+                line_color="white",
+                line_width=2,
+                annotation_text=f"{stat_y_label} Line: {line_y}",
+                annotation_position="right",
+                annotation_font_size=11,
+                annotation_font_color="white"
+            )
+        
+        # Calculate correlation
+        correlation = np.corrcoef(x_values, y_values)[0, 1] if len(x_values) > 1 else 0
+        
+        # Add trend line
+        if len(x_values) > 1:
+            z = np.polyfit(x_values, y_values, 1)
+            p = np.poly1d(z)
+            x_trend = np.linspace(min(x_values), max(x_values), 100)
+            y_trend = p(x_trend)
+            
+            fig.add_trace(go.Scatter(
+                x=x_trend,
+                y=y_trend,
+                mode='lines',
+                line=dict(color='rgba(255,255,255,0.3)', width=2, dash='dot'),
+                name='Trend',
+                showlegend=False,
+                hoverinfo='skip'
+            ))
+        
+        # Update hover to show custom data
+        fig.update_traces(
+            hovertemplate='%{customdata}<extra></extra>',
+            selector=dict(mode='markers+text')
+        )
+        
+        # Style layout
+        fig.update_layout(
+            xaxis_title=stat_x_label,
+            yaxis_title=stat_y_label,
+            template='plotly_dark',
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            height=500,
+            margin=dict(l=60, r=60, t=40, b=60),
+            showlegend=False,
+            hovermode='closest',
+            xaxis=dict(
+                showgrid=True,
+                gridcolor='rgba(255,255,255,0.1)',
+                zeroline=False,
+                tickfont=dict(size=11, color='white')
+            ),
+            yaxis=dict(
+                showgrid=True,
+                gridcolor='rgba(255,255,255,0.1)',
+                zeroline=False,
+                tickfont=dict(size=11, color='white')
+            ),
+            font=dict(color='white', size=12)
+        )
+        
+        # Add correlation annotation
+        if not np.isnan(correlation):
+            fig.add_annotation(
+                x=0.98, y=0.02,
+                xref='paper', yref='paper',
+                text=f"Correlation: {correlation:.2f}",
+                showarrow=False,
+                align='right',
+                bgcolor='rgba(0,0,0,0.5)',
+                bordercolor='white',
+                borderwidth=1,
+                font=dict(size=11, color='white')
+            )
+        
+        return fig
 

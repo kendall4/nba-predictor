@@ -191,9 +191,40 @@ class BetGenerator:
         
         all_odds = self.odds_aggregator.get_player_props(debug=False)
         
-        if all_odds is None or len(all_odds) == 0:
+        # Check for quota exceeded or other error conditions
+        if all_odds == "QUOTA_EXCEEDED":
+            try:
+                print("⚠️  API quota exceeded - cannot fetch odds")
+            except (BrokenPipeError, OSError):
+                pass
+            return pd.DataFrame()
+        
+        if all_odds is None:
+            try:
+                print("⚠️  No odds data available (API error)")
+            except (BrokenPipeError, OSError):
+                pass
+            return pd.DataFrame()
+        
+        # Ensure all_odds is a DataFrame
+        if not isinstance(all_odds, pd.DataFrame):
+            try:
+                print(f"⚠️  Unexpected odds data type: {type(all_odds)}")
+            except (BrokenPipeError, OSError):
+                pass
+            return pd.DataFrame()
+        
+        if len(all_odds) == 0:
             try:
                 print("⚠️  No odds data available")
+            except (BrokenPipeError, OSError):
+                pass
+            return pd.DataFrame()
+        
+        # Check if 'stat' column exists
+        if 'stat' not in all_odds.columns:
+            try:
+                print(f"⚠️  Odds data missing 'stat' column. Available columns: {list(all_odds.columns)}")
             except (BrokenPipeError, OSError):
                 pass
             return pd.DataFrame()

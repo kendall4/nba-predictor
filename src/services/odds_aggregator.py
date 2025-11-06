@@ -11,6 +11,9 @@ import pandas as pd
 import os
 from typing import List, Dict, Optional
 import time
+import json
+from datetime import datetime
+from pathlib import Path
 
 class OddsAggregator:
     """
@@ -45,7 +48,12 @@ class OddsAggregator:
         self.regions = ['us']  # US odds
         # Note: Player props market may vary by bookmaker - try both common names
         self.markets = ['player_props', 'player_points', 'player_rebounds', 'player_assists']
-        self.books = ['draftkings', 'fanduel', 'espnbet', 'betmgm', 'caesars', 'pointsbet']
+        # Reduced to top 2 books to save API quota (500 requests/month free tier)
+        # DraftKings and FanDuel are most popular and reliable
+        self.books = ['draftkings', 'fanduel']
+        # Cache directory for saving odds data
+        self.cache_dir = Path('data/cache/odds')
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
     
     def get_player_props(self, sport='basketball_nba', event_id: Optional[str] = None, debug: bool = False):
         """
@@ -70,12 +78,12 @@ class OddsAggregator:
             return None
         
         # Player props markets to request (per API docs)
+        # Reduced to core stats to save API quota - removed PRA (can calculate from individual stats)
         player_prop_markets = [
             'player_points',
             'player_rebounds', 
             'player_assists',
-            'player_threes',
-            'player_points_rebounds_assists'
+            'player_threes'  # Keep 3s as requested
         ]
         
         # If event_id provided, query that event directly
@@ -84,37 +92,83 @@ class OddsAggregator:
         
         # Otherwise, get all today's events first, then query each
         if debug:
-            print("📅 Getting today's NBA events...")
+            try:
+                print("📅 Getting today's NBA events...")
+            except (BrokenPipeError, OSError):
+                pass
         
         event_ids = self._get_todays_event_ids(sport, debug)
+        if event_ids == "QUOTA_EXCEEDED":
+            # Quota exceeded - return special marker
+            if debug:
+                try:
+                    print("⚠️  API quota exceeded - no credits remaining")
+                except (BrokenPipeError, OSError):
+                    pass
+            return "QUOTA_EXCEEDED"
+        if event_ids is None:
+            # Auth error - return None so UI can show appropriate message
+            if debug:
+                try:
+                    print("❌ Authentication error: Invalid API key")
+                except (BrokenPipeError, OSError):
+                    pass
+            return None
         if not event_ids:
             if debug:
-                print("⚠️  No events found for today")
+                try:
+                    print("⚠️  No events found for today")
+                except (BrokenPipeError, OSError):
+                    pass
             return pd.DataFrame()
         
         if debug:
-            print(f"✅ Found {len(event_ids)} events. Fetching player props for each...")
+            try:
+                print(f"✅ Found {len(event_ids)} events. Fetching player props for each...")
+            except (BrokenPipeError, OSError):
+                pass
         
         # Query each event for player props
         all_props = []
         for event_id in event_ids:
             event_props = self._get_player_props_for_event(sport, event_id, player_prop_markets, debug)
+            # Check if quota was exceeded during event fetch
+            if event_props == "QUOTA_EXCEEDED":
+                return "QUOTA_EXCEEDED"
             if event_props is not None and len(event_props) > 0:
                 all_props.append(event_props)
         
         if not all_props:
             if debug:
-                print("⚠️  No player props found for any events")
+                try:
+                    print("⚠️  No player props found for any events")
+                except (BrokenPipeError, OSError):
+                    pass
             return pd.DataFrame()
         
         # Combine all props
         result = pd.concat(all_props, ignore_index=True)
         if debug:
-            print(f"✅ Total props found: {len(result)}")
+            try:
+                print(f"✅ Total props found: {len(result)}")
+            except (BrokenPipeError, OSError):
+                pass
+        
+        # Save to disk cache for later use (even after quota exceeded)
+        if len(result) > 0:
+            self._save_odds_to_cache(result)
+        
         return result
     
-    def _get_todays_event_ids(self, sport='basketball_nba', debug: bool = False) -> List[str]:
-        """Get list of event IDs for today's games"""
+    def _get_todays_event_ids(self, sport='basketball_nba', debug: bool = False) -> Optional[List[str]]:
+        """
+        Get list of event IDs for today's games
+        
+        Returns:
+            List of event IDs if successful
+            None if authentication error (401)
+            [] (empty list) if no events found or other error
+        """
         url = f"{self.base_url}/sports/{sport}/odds"
         params = {
             'api_key': self.api_key,
@@ -128,19 +182,48 @@ class OddsAggregator:
             response = requests.get(url, params=params, timeout=20)
             if response.status_code != 200:
                 if debug:
-                    print(f"❌ Failed to get events: {response.status_code}")
+                    try:
+                        print(f"❌ Failed to get events: {response.status_code}")
+                        if response.status_code == 401:
+                            print(f"   Response: {response.text[:200]}")
+                    except (BrokenPipeError, OSError):
+                        pass
+                
+                # Check if it's a quota/usage error vs auth error
+                if response.status_code == 401:
+                    try:
+                        error_data = response.json()
+                        if 'error_code' in error_data and 'OUT_OF_USAGE_CREDITS' in error_data.get('error_code', ''):
+                            # Quota exceeded - return special marker
+                            if debug:
+                                try:
+                                    print("⚠️  API quota exceeded - no credits remaining")
+                                except (BrokenPipeError, OSError):
+                                    pass
+                            return "QUOTA_EXCEEDED"  # Special marker for quota errors
+                        else:
+                            # Actual auth error
+                            return None
+                    except:
+                        # Can't parse JSON, assume auth error
+                        return None
                 return []
             
             events = response.json()
             event_ids = [event.get('id') for event in events if event.get('id')]
             
             if debug:
-                print(f"📋 Found {len(event_ids)} events: {[e.get('home_team') + ' vs ' + e.get('away_team') for e in events[:3]]}...")
-            
+                try:
+                    print(f"📋 Found {len(event_ids)} events: {[e.get('home_team') + ' vs ' + e.get('away_team') for e in events[:3]]}...")
+                except (BrokenPipeError, OSError):
+                    pass
             return event_ids
         except Exception as e:
             if debug:
-                print(f"❌ Error getting events: {e}")
+                try:
+                    print(f"❌ Error getting events: {e}")
+                except (BrokenPipeError, OSError):
+                    pass
             return []
     
     def _get_player_props_for_event(self, sport: str, event_id: str, markets: List[str], debug: bool = False):
@@ -155,7 +238,7 @@ class OddsAggregator:
                     'api_key': self.api_key,
                     'regions': ','.join(self.regions),
                     'markets': ','.join(markets),  # Request multiple player prop markets
-                    'bookmakers': ','.join(self.books[:5]),  # Limit to avoid rate limits
+                    'bookmakers': ','.join(self.books),  # Use all configured books (already limited to 2)
                     'oddsFormat': 'american',
                     'dateFormat': 'iso'
                 }
@@ -190,7 +273,10 @@ class OddsAggregator:
                 used = response.headers.get('x-requests-used', 'unknown')
                 last_cost = response.headers.get('x-requests-last', 'unknown')
                 if remaining != 'unknown' and debug:
-                    print(f"📊 API Usage: {used} used, {remaining} remaining (last request cost: {last_cost})")
+                    try:
+                        print(f"📊 API Usage: {used} used, {remaining} remaining (last request cost: {last_cost})")
+                    except (BrokenPipeError, OSError):
+                        pass
                 
                 # For event-specific endpoint, response is a single event object, not a list
                 event_data = response.json()
@@ -200,31 +286,62 @@ class OddsAggregator:
             except requests.exceptions.Timeout as e:
                 if attempt < max_retries:
                     if debug:
-                        print(f"⚠️  Request timeout (attempt {attempt + 1}/{max_retries + 1}), retrying...")
+                        try:
+                            print(f"⚠️  Request timeout (attempt {attempt + 1}/{max_retries + 1}), retrying...")
+                        except (BrokenPipeError, OSError):
+                            pass
                     time.sleep(2 * (attempt + 1))
                     continue
                 if debug:
-                    print(f"❌ Request timeout after {max_retries + 1} attempts")
+                    try:
+                        print(f"❌ Request timeout after {max_retries + 1} attempts")
+                    except (BrokenPipeError, OSError):
+                        pass
                 return pd.DataFrame()
             except requests.exceptions.RequestException as e:
                 # Don't retry on auth errors or client errors
                 if hasattr(e, 'response') and e.response is not None:
                     if e.response.status_code in [401, 403]:
+                        # Check if it's quota vs auth error
+                        try:
+                            error_data = e.response.json()
+                            if 'error_code' in error_data and 'OUT_OF_USAGE_CREDITS' in error_data.get('error_code', ''):
+                                if debug:
+                                    try:
+                                        print("⚠️  API quota exceeded - no credits remaining")
+                                    except (BrokenPipeError, OSError):
+                                        pass
+                                return "QUOTA_EXCEEDED"
+                        except:
+                            pass
+                        # Actual auth error
                         if debug:
-                            print(f"❌ Authentication error: {e.response.status_code}")
+                            try:
+                                print(f"❌ Authentication error: {e.response.status_code}")
+                            except (BrokenPipeError, OSError):
+                                pass
                         return None
                     elif e.response.status_code == 429:
                         if debug:
-                            print(f"⚠️  Rate limit exceeded (attempt {attempt + 1}/{max_retries + 1})")
+                            try:
+                                print(f"⚠️  Rate limit exceeded (attempt {attempt + 1}/{max_retries + 1})")
+                            except (BrokenPipeError, OSError):
+                                pass
                         if attempt < max_retries:
                             time.sleep(5 * (attempt + 1))
                             continue
                 if debug:
-                    print(f"❌ Request error: {e}")
+                    try:
+                        print(f"❌ Request error: {e}")
+                    except (BrokenPipeError, OSError):
+                        pass
                 return None
             except Exception as e:
                 if debug:
-                    print(f"❌ Unexpected error: {e}")
+                    try:
+                        print(f"❌ Unexpected error: {e}")
+                    except (BrokenPipeError, OSError):
+                        pass
                 return None
         
         # Process response data (outside retry loop, only if we succeeded)
@@ -232,28 +349,37 @@ class OddsAggregator:
         if 'data' not in locals():
             # All retries failed, return empty DataFrame
             if debug:
-                print("⚠️  All retry attempts failed")
+                try:
+                    print("⚠️  All retry attempts failed")
+                except (BrokenPipeError, OSError):
+                    pass
             return pd.DataFrame()
         
         try:
             # data is now a list with one event (from event-specific endpoint)
             if debug:
-                print(f"🔍 API Response: {len(data)} events")
-                if len(data) > 0:
-                    first_event = data[0]
-                    print(f"   First event: {first_event.get('home_team')} vs {first_event.get('away_team')}")
-                    if 'bookmakers' in first_event and len(first_event['bookmakers']) > 0:
-                        first_book = first_event['bookmakers'][0]
-                        markets = [m.get('key') for m in first_book.get('markets', [])]
-                        print(f"   Available markets in {first_book.get('key')}: {markets}")
+                try:
+                    print(f"🔍 API Response: {len(data)} events")
+                    if len(data) > 0:
+                        first_event = data[0]
+                        print(f"   First event: {first_event.get('home_team')} vs {first_event.get('away_team')}")
+                        if 'bookmakers' in first_event and len(first_event['bookmakers']) > 0:
+                            first_book = first_event['bookmakers'][0]
+                            markets = [m.get('key') for m in first_book.get('markets', [])]
+                            print(f"   Available markets in {first_book.get('key')}: {markets}")
+                except (BrokenPipeError, OSError):
+                    pass
             
             # Debug: log available markets if no props found
             if not data or len(data) == 0:
                 if debug:
-                    print("⚠️  No events returned from API")
-                    print("💡 Tip: Check if there are NBA games scheduled for today")
-                    print(f"   URL called: {url}")
-                    print(f"   Parameters: {params}")
+                    try:
+                        print("⚠️  No events returned from API")
+                        print("💡 Tip: Check if there are NBA games scheduled for today")
+                        print(f"   URL called: {url}")
+                        print(f"   Parameters: {params}")
+                    except (BrokenPipeError, OSError):
+                        pass
                 return pd.DataFrame()
             
             # Parse player props
@@ -277,9 +403,12 @@ class OddsAggregator:
                         if 'player' not in market_key and 'prop' not in market_key:
                             # Log available markets for debugging
                             if debug and not hasattr(self, '_logged_markets'):
-                                available_markets = [m.get('key') for m in bookmaker.get('markets', [])]
-                                print(f"📋 Available markets in {book_name}: {available_markets}")
-                                self._logged_markets = True
+                                try:
+                                    available_markets = [m.get('key') for m in bookmaker.get('markets', [])]
+                                    print(f"📋 Available markets in {book_name}: {available_markets}")
+                                    self._logged_markets = True
+                                except (BrokenPipeError, OSError):
+                                    pass
                             continue
                         
                         for outcome in market.get('outcomes', []):
@@ -362,16 +491,22 @@ class OddsAggregator:
             
             if not props:
                 if debug:
-                    print("⚠️  No player props found in API response")
-                    print("💡 Available markets might not include player props, or no games today")
+                    try:
+                        print("⚠️  No player props found in API response")
+                        print("💡 Available markets might not include player props, or no games today")
+                    except (BrokenPipeError, OSError):
+                        pass
                 return pd.DataFrame()
             
             df = pd.DataFrame(props)
             
             if debug:
-                print(f"✅ Found {len(df)} player props from {df['book'].nunique()} books")
-                print(f"   Unique players: {df['player'].nunique()}")
-                print(f"   Unique stats: {df['stat'].unique().tolist()}")
+                try:
+                    print(f"✅ Found {len(df)} player props from {df['book'].nunique()} books")
+                    print(f"   Unique players: {df['player'].nunique()}")
+                    print(f"   Unique stats: {df['stat'].unique().tolist()}")
+                except (BrokenPipeError, OSError):
+                    pass
             
             # Group by player/stat/line and pivot to get over/under side by side
             comparison = []
@@ -392,19 +527,83 @@ class OddsAggregator:
         
         except requests.exceptions.RequestException as e:
             if debug:
-                print(f"❌ Error fetching odds: {e}")
-                if hasattr(e, 'response') and e.response is not None:
-                    if e.response.status_code == 401:
-                        print("   Invalid API key")
-                    elif e.response.status_code == 429:
-                        print("   Rate limit exceeded. Free tier: 500 requests/month")
+                try:
+                    print(f"❌ Error fetching odds: {e}")
+                    if hasattr(e, 'response') and e.response is not None:
+                        if e.response.status_code == 401:
+                            print("   Invalid API key")
+                        elif e.response.status_code == 429:
+                            print("   Rate limit exceeded. Free tier: 500 requests/month")
+                except (BrokenPipeError, OSError):
+                    pass
             return None
         except Exception as e:
             if debug:
-                print(f"❌ Error parsing odds: {e}")
-                import traceback
-                traceback.print_exc()
+                try:
+                    print(f"❌ Error parsing odds: {e}")
+                    import traceback
+                    traceback.print_exc()
+                except (BrokenPipeError, OSError):
+                    pass
             return None
+    
+    def _save_odds_to_cache(self, odds_df: pd.DataFrame):
+        """Save odds data to disk cache for later retrieval"""
+        try:
+            today = datetime.now().strftime('%Y-%m-%d')
+            cache_file = self.cache_dir / f"odds_{today}.parquet"
+            odds_df.to_parquet(cache_file, index=False)
+        except Exception:
+            # If parquet fails, try CSV
+            try:
+                today = datetime.now().strftime('%Y-%m-%d')
+                cache_file = self.cache_dir / f"odds_{today}.csv"
+                odds_df.to_csv(cache_file, index=False)
+            except Exception:
+                pass  # Silently fail if cache save doesn't work
+    
+    def load_cached_odds(self, date: Optional[str] = None) -> Optional[pd.DataFrame]:
+        """
+        Load odds data from disk cache
+        
+        Args:
+            date: Date string in YYYY-MM-DD format (defaults to today)
+        
+        Returns:
+            DataFrame with cached odds, or None if not found
+        """
+        if date is None:
+            date = datetime.now().strftime('%Y-%m-%d')
+        
+        # Try parquet first
+        cache_file = self.cache_dir / f"odds_{date}.parquet"
+        if cache_file.exists():
+            try:
+                return pd.read_parquet(cache_file)
+            except Exception:
+                pass
+        
+        # Fallback to CSV
+        cache_file = self.cache_dir / f"odds_{date}.csv"
+        if cache_file.exists():
+            try:
+                return pd.read_csv(cache_file)
+            except Exception:
+                pass
+        
+        return None
+    
+    def get_available_cached_dates(self) -> List[str]:
+        """Get list of dates that have cached odds data"""
+        dates = []
+        for file in self.cache_dir.glob("odds_*.parquet"):
+            date_str = file.stem.replace("odds_", "")
+            dates.append(date_str)
+        for file in self.cache_dir.glob("odds_*.csv"):
+            date_str = file.stem.replace("odds_", "")
+            if date_str not in dates:
+                dates.append(date_str)
+        return sorted(dates, reverse=True)
     
     def compare_books(self, player_name: str, stat: str, line: float):
         """
@@ -504,7 +703,10 @@ class OddsAggregator:
         props_df = self.get_player_props(debug=debug)
         if props_df is None or len(props_df) == 0:
             if debug:
-                print("⚠️  No player props data available (no games today or API issue)")
+                try:
+                    print("⚠️  No player props data available (no games today or API issue)")
+                except (BrokenPipeError, OSError):
+                    pass
             return None
         
         # Normalize stat name
