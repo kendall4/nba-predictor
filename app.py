@@ -28,6 +28,7 @@ from src.ui.nba import games as ui_games
 from src.ui.nba import line_shopping as ui_shopping
 from src.ui.nba import ev_plus as ui_ev_plus
 from src.ui.nba import rebound_chances as ui_rebound
+from src.ui.nba import microwave as ui_microwave
 
 # Page config - optimized for mobile
 st.set_page_config(
@@ -394,8 +395,8 @@ with tab_nba:
         st.stop()
 
     # Sub-tabs inside NBA
-    tab_leader, tab_predict, tab_hot, tab_sgp, tab_lines, tab_player, tab_games, tab_shopping, tab_ev_plus, tab_rebound = st.tabs([
-        "🏆 Leaderboard", "📈 Predictions", "🔥 Hot Hand", "🎰 Live SGP", "📊 Lines Explorer", "🧑‍💻 Player Explorer", "🗓️ Games", "💰 Line Shopping", "⚡ EV+", "🏀 Rebound Chances"
+    tab_leader, tab_predict, tab_hot, tab_sgp, tab_lines, tab_player, tab_games, tab_shopping, tab_ev_plus, tab_rebound, tab_microwave = st.tabs([
+        "🏆 Leaderboard", "📈 Predictions", "🔥 Hot Hand", "🎰 Live SGP", "📊 Lines Explorer", "🧑‍💻 Player Explorer", "🗓️ Games", "💰 Line Shopping", "⚡ EV+", "🏀 Rebound Chances", "🔥 Microwave"
     ])
 
     with tab_leader:
@@ -427,6 +428,9 @@ with tab_nba:
     
     with tab_rebound:
         ui_rebound.render(predictions)
+    
+    with tab_microwave:
+        ui_microwave.render(predictions, games)
 
 with tab_nfl:
     st.header("NFL Player Props (beta)")
