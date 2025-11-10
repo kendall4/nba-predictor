@@ -26,23 +26,39 @@ def render(predictions):
     
     try:
         # Initialize analyzer
+        init_status = st.empty()
+        init_status.info("🔄 Initializing rebound analyzer...")
         analyzer = ReboundChancesAnalyzer()
+        init_status.empty()
     except Exception as e:
+        init_status.empty()
         st.error(f"❌ Error initializing rebound analyzer: {str(e)}")
         import traceback
         with st.expander("Error details"):
             st.code(traceback.format_exc())
         return
     
-    # Show loading message
+    # Show loading message with progress
     try:
-        with st.spinner("Calculating rebound chances for all players..."):
-            rebound_df = analyzer.analyze_all_players(predictions, season='2025-26')
+        num_players = len(predictions)
+        calc_status = st.empty()
+        
+        if num_players > 50:
+            calc_status.warning(f"⚠️ Calculating rebound chances for {num_players} players... This may take 15-30 seconds. Please wait.")
+        else:
+            calc_status.info(f"🔄 Calculating rebound chances for {num_players} players... This may take a moment.")
+        
+        # Calculate rebound chances
+        rebound_df = analyzer.analyze_all_players(predictions, season='2025-26')
+        
+        calc_status.empty()
     except Exception as e:
+        calc_status.empty()
         st.error(f"❌ Error calculating rebound chances: {str(e)}")
         import traceback
         with st.expander("Error details"):
             st.code(traceback.format_exc())
+        st.info("💡 Tip: Try filtering predictions to fewer players first (adjust min_minutes or min_value in sidebar)")
         return
     
     if rebound_df is None or len(rebound_df) == 0:

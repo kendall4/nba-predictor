@@ -49,6 +49,7 @@ def render(predictions, games):
     num_games = len(games)
     st.success(f"✅ {num_players_today} players from {num_games} game(s) today")
     st.caption(f"Teams playing: {', '.join(sorted(teams_playing_today))}")
+    st.info("💡 Note: Injured/out players are already filtered at the app level. All tabs show only healthy players.")
     
     try:
         tracker = MicrowaveTracker()

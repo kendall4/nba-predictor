@@ -127,7 +127,7 @@ with st.sidebar:
     enable_ev = st.toggle("Enable Alt-Line EV (points)", value=True)
     st.markdown("---")
     st.subheader("🏥 Injury Filtering")
-    filter_injured = st.toggle("Filter injured/out players", value=True, help="Excludes players marked 'Out' from predictions")
+    filter_injured = st.toggle("Filter injured/out players", value=True, help="Excludes players marked 'Out' from predictions. This applies to ALL tabs.")
     include_questionable = st.toggle("Include questionable players", value=True, help="Shows players with 'Questionable' status (with warning)")
 
 # Get today's games
@@ -328,62 +328,64 @@ with tab_nba:
                 import os
                 injury_tracker = InjuryTracker(api_key=os.getenv('ROTOWIRE_API_KEY'))
             
-            # Sort first, then only check top players (faster)
-            predictions_sorted = predictions.sort_values('overall_value', ascending=False)
-            top_n_to_check = min(50, len(predictions_sorted))  # Only check top 50
-            top_players = predictions_sorted.head(top_n_to_check)
-            rest_players = predictions_sorted.iloc[top_n_to_check:]
+            # Get all unique player names
+            player_names = predictions['player_name'].unique().tolist()
             
-            healthy_players = []
-            injured_count = 0
-            questionable_count = 0
+            # Use cached batch method (fast, only fetches once per day)
+            status_placeholder.info(f"🏥 Checking injury status for {len(player_names)} players (using daily cache)...")
             
-            if top_n_to_check > 0:
-                st.write(f"Checking injury status for top {top_n_to_check} players...")
-                progress_bar = st.progress(0)
+            try:
+                # Get all statuses at once (uses cache if available)
+                injury_statuses = injury_tracker.get_multiple_statuses(player_names, use_cache=True)
                 
-                for idx, (_, row) in enumerate(top_players.iterrows()):
+                # Create a mapping of player name to status
+                status_map = dict(zip(injury_statuses['player'], injury_statuses['status']))
+                
+                # Filter predictions based on status
+                healthy_players = []
+                injured_count = 0
+                questionable_count = 0
+                injured_names = []
+                
+                for _, row in predictions.iterrows():
                     player_name = row['player_name']
-                    try:
-                        status = injury_tracker.get_player_status(player_name)
-                        
-                        # Filter out "Out" status
-                        if status['status'] == 'Out':
-                            injured_count += 1
-                            continue
-                        
-                        # Optionally filter "Questionable" based on toggle
-                        if status['status'] == 'Questionable' and not include_questionable:
-                            questionable_count += 1
-                            continue
-                        
-                        if status['status'] == 'Questionable':
-                            questionable_count += 1
-                        
-                        healthy_players.append(row)
-                    except Exception:
-                        # If injury check fails, include player (fail-safe)
-                        healthy_players.append(row)
+                    status = status_map.get(player_name, 'Unknown')
                     
-                    # Update progress every player
-                    progress_bar.progress((idx + 1) / top_n_to_check)
+                    # Filter out "Out" status
+                    if status == 'Out':
+                        injured_count += 1
+                        injured_names.append(player_name)
+                        continue
+                    
+                    # Optionally filter "Questionable" based on toggle
+                    if status == 'Questionable' and not include_questionable:
+                        questionable_count += 1
+                        continue
+                    
+                    if status == 'Questionable':
+                        questionable_count += 1
+                    
+                    healthy_players.append(row)
                 
-                progress_bar.empty()
-            
-            # Include rest of players without injury check (assume healthy)
-            # This speeds things up significantly
-            for _, row in rest_players.iterrows():
-                healthy_players.append(row)
-            
-            status_msg = []
-            if injured_count > 0:
-                status_msg.append(f"❌ {injured_count} out")
-            if questionable_count > 0 and include_questionable:
-                status_msg.append(f"⚠️ {questionable_count} questionable")
-            if status_msg:
-                st.info("Injury filter: " + " | ".join(status_msg))
-            
-            predictions = pd.DataFrame(healthy_players)
+                # Show summary
+                status_msg = []
+                if injured_count > 0:
+                    injured_list = ', '.join(injured_names[:5])
+                    if len(injured_names) > 5:
+                        injured_list += f" and {len(injured_names) - 5} more"
+                    status_msg.append(f"❌ {injured_count} out: {injured_list}")
+                if questionable_count > 0 and include_questionable:
+                    status_msg.append(f"⚠️ {questionable_count} questionable")
+                if status_msg:
+                    status_placeholder.info("Injury filter: " + " | ".join(status_msg))
+                
+                predictions = pd.DataFrame(healthy_players)
+            except Exception as e:
+                # If injury check fails, show warning but continue with all players
+                status_placeholder.warning(f"⚠️ Could not check injury status: {str(e)}. Showing all players.")
+                import traceback
+                with st.expander("Error details"):
+                    st.code(traceback.format_exc())
         predictions = predictions.sort_values('overall_value', ascending=False)
         st.session_state['predictions'] = predictions
         status_placeholder.empty()

@@ -16,6 +16,9 @@ from bs4 import BeautifulSoup
 import warnings
 from contextlib import contextmanager
 import sys
+from pathlib import Path
+from datetime import datetime, timedelta
+import json
 
 class InjuryTracker:
     """
@@ -36,9 +39,11 @@ class InjuryTracker:
         self.cache = {}
         self.injuries_df = None  # Cache full injuries list (Rotowire)
         self.espn_injuries_df = None  # Cache ESPN injuries
-        self.cache_dir = 'data/cache'
+        self.cache_dir = Path('data/cache')
+        self.cache_file = self.cache_dir / 'injuries_cache.json'
         self.request_delay = 0.3  # Delay between requests to avoid rate limits
         os.makedirs(self.cache_dir, exist_ok=True)
+        self._load_daily_cache()
     
     @contextmanager
     def _suppress_timeout_errors(self):
@@ -133,14 +138,29 @@ class InjuryTracker:
     def _parse_espn_table_row(self, row) -> Optional[Dict]:
         """Parse a single ESPN injury table row"""
         cols = row.find_all('td')
-        if len(cols) < 3:
+        if len(cols) < 4:
             return None
+        
+        # ESPN table structure:
+        # Col 0: Player name
+        # Col 1: Position
+        # Col 2: Date
+        # Col 3: Status (Out, Day-To-Day, etc.)
+        # Col 4: Injury description
         
         player_name = cols[0].get_text(strip=True)
         position = cols[1].get_text(strip=True)
-        status_text = cols[2].get_text(strip=True)
+        status_text = cols[3].get_text(strip=True) if len(cols) > 3 else ''  # Status is in col 3
         status = self._parse_espn_status(status_text)
-        injury_desc = cols[3].get_text(strip=True) if len(cols) > 3 else 'Unknown'
+        injury_desc = cols[4].get_text(strip=True) if len(cols) > 4 else 'Unknown'
+        
+        # Also check injury description for status keywords (some players have "ruled out" in description)
+        if status == 'Unknown' and injury_desc:
+            injury_lower = injury_desc.lower()
+            if 'ruled out' in injury_lower or 'out for' in injury_lower:
+                status = 'Out'
+            elif 'questionable' in injury_lower:
+                status = 'Questionable'
         
         return {
             'player_name': player_name,
@@ -148,6 +168,38 @@ class InjuryTracker:
             'injury': injury_desc,
             'position': position
         }
+    
+    def _load_daily_cache(self):
+        """Load cached injuries from file if it's from today"""
+        if not self.cache_file.exists():
+            return
+        
+        try:
+            with open(self.cache_file, 'r') as f:
+                cache_data = json.load(f)
+            
+            cache_date = datetime.fromisoformat(cache_data.get('date', '2000-01-01'))
+            # If cache is from today, use it
+            if cache_date.date() == datetime.now().date():
+                self.espn_injuries_df = pd.DataFrame(cache_data.get('injuries', []))
+                if len(self.espn_injuries_df) > 0:
+                    print(f"✅ Loaded {len(self.espn_injuries_df)} injuries from cache (today)")
+        except Exception as e:
+            # If cache is corrupted, ignore it
+            pass
+    
+    def _save_daily_cache(self, injuries_df: pd.DataFrame):
+        """Save injuries to cache file with today's date"""
+        try:
+            cache_data = {
+                'date': datetime.now().isoformat(),
+                'injuries': injuries_df.to_dict('records')
+            }
+            with open(self.cache_file, 'w') as f:
+                json.dump(cache_data, f)
+        except Exception:
+            # If save fails, continue without cache
+            pass
     
     def _get_espn_injuries(self) -> Optional[pd.DataFrame]:
         """
@@ -178,7 +230,13 @@ class InjuryTracker:
                         if injury_data:
                             injuries.append(injury_data)
                 
-                return pd.DataFrame(injuries) if injuries else None
+                injuries_df = pd.DataFrame(injuries) if injuries else None
+                
+                # Save to daily cache
+                if injuries_df is not None and len(injuries_df) > 0:
+                    self._save_daily_cache(injuries_df)
+                
+                return injuries_df
                 
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 if attempt < max_retries:
@@ -333,8 +391,44 @@ class InjuryTracker:
         self.cache[cache_key] = result
         return result
     
-    def get_multiple_statuses(self, player_names: List[str]) -> pd.DataFrame:
-        """Get status for multiple players (cached, fast)"""
+    def get_multiple_statuses(self, player_names: List[str], use_cache: bool = True) -> pd.DataFrame:
+        """
+        Get status for multiple players (cached, fast)
+        
+        Args:
+            player_names: List of player names to check
+            use_cache: If True, only fetch from API if cache is stale (once per day)
+        """
+        # If cache is empty or stale, fetch fresh data first
+        if use_cache and (self.espn_injuries_df is None or len(self.espn_injuries_df) == 0):
+            # Fetch all injuries once (this will cache it)
+            self.espn_injuries_df = self._get_espn_injuries()
+        
+        # If we have cached ESPN injuries from today, use them
+        if use_cache and self.espn_injuries_df is not None and len(self.espn_injuries_df) > 0:
+            results = []
+            for name in player_names:
+                injury_row = self._match_player_in_df(self.espn_injuries_df, name)
+                if injury_row is not None:
+                    results.append({
+                        'player': name,
+                        'status': str(injury_row.get('status', 'Unknown')),
+                        'injury': str(injury_row.get('injury', 'Unknown')),
+                        'last_updated': datetime.now().isoformat(),
+                        'source': 'espn_cached'
+                    })
+                else:
+                    # Not in injury list = healthy
+                    results.append({
+                        'player': name,
+                        'status': 'Healthy',
+                        'injury': None,
+                        'last_updated': datetime.now().isoformat(),
+                        'source': 'espn_cached_healthy'
+                    })
+            return pd.DataFrame(results)
+        
+        # Fallback: fetch individual statuses (slower, but works if ESPN scraping fails)
         results = []
         for name in player_names:
             try:
@@ -348,7 +442,7 @@ class InjuryTracker:
                     'player': name,
                     'status': 'Healthy',  # Default to healthy on error
                     'injury': None,
-                    'last_updated': pd.Timestamp.now().isoformat(),
+                    'last_updated': datetime.now().isoformat(),
                     'source': 'error_fallback'
                 })
                 time.sleep(self.request_delay)

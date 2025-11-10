@@ -301,7 +301,11 @@ class ReboundChancesAnalyzer:
             print(f"Warning: Missing columns in predictions: {missing_cols}")
             return pd.DataFrame()
         
-        for _, row in predictions_df.iterrows():
+        total_players = len(predictions_df)
+        processed = 0
+        errors = 0
+        
+        for idx, row in predictions_df.iterrows():
             player_name = row.get('player_name')
             opponent = row.get('opponent')
             expected_minutes = row.get('minutes', 30.0)
@@ -320,8 +324,13 @@ class ReboundChancesAnalyzer:
                     expected_minutes=float(expected_minutes) if not pd.isna(expected_minutes) else 30.0,
                     season=season
                 )
+                processed += 1
             except Exception as e:
                 # Skip players with errors (invalid opponent, missing data, etc.)
+                errors += 1
+                # Only print every 10th error to avoid spam
+                if errors <= 5 or errors % 10 == 0:
+                    print(f"Warning: Skipped {player_name} vs {opponent}: {str(e)[:50]}")
                 continue
             
             if chances:
@@ -353,11 +362,14 @@ class ReboundChancesAnalyzer:
                 results.append(result)
         
         if not results:
+            print(f"Warning: No valid rebound chances calculated. Processed: {processed}, Errors: {errors}")
             return pd.DataFrame()
         
         df = pd.DataFrame(results)
         # Sort by rebound chances (highest first)
         df = df.sort_values('rebound_chances', ascending=False)
+        
+        print(f"Rebound chances analysis complete: {len(df)} players processed successfully")
         
         return df
 
