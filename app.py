@@ -279,6 +279,55 @@ with tab_nba:
     if 'predictions_raw' not in st.session_state:
         st.session_state['predictions_raw'] = None  # Store raw predictions before filters
 
+    # Helper function to apply injury filtering
+    def apply_injury_filter(predictions_df, injury_tracker_instance):
+        """Apply injury filtering to predictions dataframe"""
+        if not filter_injured:
+            return predictions_df
+        
+        # Get all unique player names
+        player_names = predictions_df['player_name'].unique().tolist()
+        
+        try:
+            # Get all statuses at once (uses cache if available)
+            injury_statuses = injury_tracker_instance.get_multiple_statuses(player_names, use_cache=True)
+            
+            # Create a mapping of player name to status
+            status_map = dict(zip(injury_statuses['player'], injury_statuses['status']))
+            
+            # Filter predictions based on status
+            healthy_players = []
+            injured_count = 0
+            questionable_count = 0
+            injured_names = []
+            
+            for _, row in predictions_df.iterrows():
+                player_name = row['player_name']
+                status = status_map.get(player_name, 'Unknown')
+                
+                # Filter out "Out" status
+                if status == 'Out':
+                    injured_count += 1
+                    injured_names.append(player_name)
+                    continue
+                
+                # Optionally filter "Questionable" based on toggle
+                if status == 'Questionable' and not include_questionable:
+                    questionable_count += 1
+                    continue
+                
+                if status == 'Questionable':
+                    questionable_count += 1
+                
+                healthy_players.append(row)
+            
+            # Return filtered predictions and stats
+            filtered_df = pd.DataFrame(healthy_players)
+            return filtered_df, injured_count, questionable_count, injured_names
+        except Exception:
+            # If injury check fails, return original predictions
+            return predictions_df, 0, 0, []
+    
     # Controls for predictions
     st.subheader("Predictions Workspace")
     c1, c2 = st.columns([1, 2])
@@ -320,75 +369,64 @@ with tab_nba:
         
         # Filter out injured/out players if enabled
         # Use preloaded injury tracker if available
+        if 'injury_tracker' in st.session_state:
+            injury_tracker = st.session_state['injury_tracker']
+        else:
+            from src.services.injury_tracker import InjuryTracker
+            import os
+            injury_tracker = InjuryTracker(api_key=os.getenv('ROTOWIRE_API_KEY'))
+        
         if filter_injured:
-            if 'injury_tracker' in st.session_state:
-                injury_tracker = st.session_state['injury_tracker']
-            else:
-                from src.services.injury_tracker import InjuryTracker
-                import os
-                injury_tracker = InjuryTracker(api_key=os.getenv('ROTOWIRE_API_KEY'))
+            status_placeholder.info(f"🏥 Checking injury status for {len(predictions)} players (using daily cache)...")
+            predictions, injured_count, questionable_count, injured_names = apply_injury_filter(predictions, injury_tracker)
             
-            # Get all unique player names
-            player_names = predictions['player_name'].unique().tolist()
-            
-            # Use cached batch method (fast, only fetches once per day)
-            status_placeholder.info(f"🏥 Checking injury status for {len(player_names)} players (using daily cache)...")
-            
-            try:
-                # Get all statuses at once (uses cache if available)
-                injury_statuses = injury_tracker.get_multiple_statuses(player_names, use_cache=True)
-                
-                # Create a mapping of player name to status
-                status_map = dict(zip(injury_statuses['player'], injury_statuses['status']))
-                
-                # Filter predictions based on status
-                healthy_players = []
-                injured_count = 0
-                questionable_count = 0
-                injured_names = []
-                
-                for _, row in predictions.iterrows():
-                    player_name = row['player_name']
-                    status = status_map.get(player_name, 'Unknown')
-                    
-                    # Filter out "Out" status
-                    if status == 'Out':
-                        injured_count += 1
-                        injured_names.append(player_name)
-                        continue
-                    
-                    # Optionally filter "Questionable" based on toggle
-                    if status == 'Questionable' and not include_questionable:
-                        questionable_count += 1
-                        continue
-                    
-                    if status == 'Questionable':
-                        questionable_count += 1
-                    
-                    healthy_players.append(row)
-                
-                # Show summary
-                status_msg = []
-                if injured_count > 0:
-                    injured_list = ', '.join(injured_names[:5])
-                    if len(injured_names) > 5:
-                        injured_list += f" and {len(injured_names) - 5} more"
-                    status_msg.append(f"❌ {injured_count} out: {injured_list}")
-                if questionable_count > 0 and include_questionable:
-                    status_msg.append(f"⚠️ {questionable_count} questionable")
-                if status_msg:
-                    status_placeholder.info("Injury filter: " + " | ".join(status_msg))
-                
-                predictions = pd.DataFrame(healthy_players)
-            except Exception as e:
-                # If injury check fails, show warning but continue with all players
-                status_placeholder.warning(f"⚠️ Could not check injury status: {str(e)}. Showing all players.")
-                import traceback
-                with st.expander("Error details"):
-                    st.code(traceback.format_exc())
+            # Show summary
+            status_msg = []
+            if injured_count > 0:
+                injured_list = ', '.join(injured_names[:5])
+                if len(injured_names) > 5:
+                    injured_list += f" and {len(injured_names) - 5} more"
+                status_msg.append(f"❌ {injured_count} out: {injured_list}")
+            if questionable_count > 0 and include_questionable:
+                status_msg.append(f"⚠️ {questionable_count} questionable")
+            if status_msg:
+                status_placeholder.info("Injury filter: " + " | ".join(status_msg))
+        
         predictions = predictions.sort_values('overall_value', ascending=False)
         st.session_state['predictions'] = predictions
         status_placeholder.empty()
+    
+    # Always apply injury filter if enabled (even if predictions already exist)
+    # This ensures filtering is applied even when using cached predictions
+    predictions = st.session_state['predictions']
+    if predictions is not None and len(predictions) > 0 and filter_injured:
+        # Get injury tracker
+        if 'injury_tracker' in st.session_state:
+            injury_tracker = st.session_state['injury_tracker']
+        else:
+            from src.services.injury_tracker import InjuryTracker
+            import os
+            injury_tracker = InjuryTracker(api_key=os.getenv('ROTOWIRE_API_KEY'))
+        
+        # Apply filtering
+        predictions, injured_count, questionable_count, injured_names = apply_injury_filter(predictions, injury_tracker)
+        
+        # Update session state with filtered predictions
+        st.session_state['predictions'] = predictions
+        
+        # Show summary if any were filtered
+        if injured_count > 0 or questionable_count > 0:
+            status_msg = []
+            if injured_count > 0:
+                injured_list = ', '.join(injured_names[:5])
+                if len(injured_names) > 5:
+                    injured_list += f" and {len(injured_names) - 5} more"
+                status_msg.append(f"❌ {injured_count} out: {injured_list}")
+            if questionable_count > 0 and include_questionable:
+                status_msg.append(f"⚠️ {questionable_count} questionable")
+            if status_msg:
+                st.info("🏥 Injury filter applied: " + " | ".join(status_msg))
+    
     st.success(f"✅ Generated predictions for {len(st.session_state['predictions'])} players!")
 
     predictions = st.session_state['predictions']
