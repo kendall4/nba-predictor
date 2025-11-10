@@ -28,6 +28,14 @@ def render(predictions, games):
         st.info("No games scheduled for today.")
         return
     
+    # Debug: Check if predictions have required columns
+    required_cols = ['player_name', 'team', 'opponent']
+    missing_cols = [col for col in required_cols if col not in predictions.columns]
+    if missing_cols:
+        st.error(f"❌ Missing required columns in predictions: {', '.join(missing_cols)}")
+        st.info("Available columns: " + ", ".join(predictions.columns.tolist()))
+        return
+    
     # Get teams playing today
     teams_playing_today = set()
     for game in games:
@@ -98,8 +106,10 @@ def render(predictions, games):
         )
     
     # Calculate microwave stats
+    calc_status = st.empty()
+    microwave_df = None
+    
     try:
-        calc_status = st.empty()
         num_players = len(predictions_filtered['player_name'].unique())
         calc_status.info(f"🔄 Calculating microwave stats for {num_players} players playing today...")
         
@@ -115,7 +125,7 @@ def render(predictions, games):
         return
     
     if microwave_df is None or len(microwave_df) == 0:
-        st.warning("No microwave data available.")
+        st.warning("No microwave data available. This might happen if no players have sufficient data.")
         return
     
     # Apply filters
@@ -168,6 +178,12 @@ def render(predictions, games):
         'first_5_min_points', 'first_5_min_rebounds', 'first_5_min_assists', 'first_5_min_threes',
         'season_ppg', 'expected_minutes'
     ]
+    
+    # Add optional columns if they exist
+    optional_cols = ['shot_matchup_multiplier', 'combined_multiplier', 'player_3pt_pct', 'opp_3pt_pct_allowed']
+    for col in optional_cols:
+        if col in filtered_df.columns and col not in display_cols:
+            display_cols.append(col)
     
     available_cols = [c for c in display_cols if c in filtered_df.columns]
     display_df = filtered_df[available_cols].copy()
