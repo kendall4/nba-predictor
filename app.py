@@ -368,7 +368,20 @@ with tab_nba:
     if generate or st.session_state['predictions'] is None:
         # Show a status message but don't block the UI
         status_placeholder = st.empty()
-        status_placeholder.info("🔄 Generating predictions... This may take a moment")
+        
+        # Show which weights are enabled
+        enabled_factors = []
+        if system_fit_weight > 0:
+            enabled_factors.append(f"System Fit ({system_fit_weight:.1f})")
+        if recent_form_weight > 0:
+            enabled_factors.append(f"Recent Form ({recent_form_weight:.1f})")
+        if h2h_weight > 0:
+            enabled_factors.append(f"H2H ({h2h_weight:.1f})")
+        
+        if enabled_factors:
+            status_placeholder.info(f"🔄 Generating predictions with: {', '.join(enabled_factors)}... This may take a moment.")
+        else:
+            status_placeholder.info("🔄 Generating predictions... This may take a moment")
         
         # Use preloaded builder if available
         from src.analysis.value_analyzer import ValueAnalyzer

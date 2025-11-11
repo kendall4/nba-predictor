@@ -411,29 +411,7 @@ class MatchupFeatureBuilder:
                 from src.analysis.hot_hand_tracker import HotHandTracker
                 self._hot_tracker = HotHandTracker(blend_mode="latest")
         
-        total_players = 0
-        for game in games_today:
-            home = game['home']
-            away = game['away']
-            
-            # Get all players from both teams (from pre-filtered set)
-            home_players = players_today[players_today['TEAM_ABBREVIATION'] == home]
-            away_players = players_today[players_today['TEAM_ABBREVIATION'] == away]
-
-            # Safety: ensure unique players per team (in case of residual duplicates)
-            if 'PLAYER_ID' in home_players.columns:
-                home_players = home_players.drop_duplicates(subset=['PLAYER_ID'])
-            else:
-                home_players = home_players.drop_duplicates(subset=['PLAYER_NAME'])
-            if 'PLAYER_ID' in away_players.columns:
-                away_players = away_players.drop_duplicates(subset=['PLAYER_ID'])
-            else:
-                away_players = away_players.drop_duplicates(subset=['PLAYER_NAME'])
-            
-            total_players += len(home_players) + len(away_players)
-        
         # Build features for each player
-        processed = 0
         for game in games_today:
             home = game['home']
             away = game['away']
@@ -459,7 +437,6 @@ class MatchupFeatureBuilder:
                 )
                 if features:
                     all_features.append(features)
-                processed += 1
             
             for _, player in away_players.iterrows():
                 features = self.get_player_features(
@@ -470,7 +447,6 @@ class MatchupFeatureBuilder:
                 )
                 if features:
                     all_features.append(features)
-                processed += 1
         
         return pd.DataFrame(all_features)
 
