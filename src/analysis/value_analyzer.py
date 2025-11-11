@@ -12,10 +12,12 @@ class ValueAnalyzer:
     
     # Cache the builder instance to avoid reloading data every time
     _builder = None
+    _builder_version = 2  # Increment when signature changes
     
-    def __init__(self):
+    def __init__(self, force_reload: bool = False):
         # Reuse builder instance if already created (performance optimization)
-        if ValueAnalyzer._builder is None:
+        # But reload if signature changed or forced
+        if ValueAnalyzer._builder is None or force_reload:
             ValueAnalyzer._builder = MatchupFeatureBuilder(blend_mode="latest")
         self.builder = ValueAnalyzer._builder
     

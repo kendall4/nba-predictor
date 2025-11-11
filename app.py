@@ -271,11 +271,16 @@ with tab_nba:
     st.markdown("---")
 
     # Preload all data on app start for faster tab switching
-    @st.cache_resource
-    def preload_matchup_builder():
-        """Preload MatchupFeatureBuilder once (shared across sessions)"""
+    # Note: Cache key includes version to force reload when signature changes
+    @st.cache_resource(show_spinner=False)
+    def preload_matchup_builder(_version=2):
+        """Preload MatchupFeatureBuilder once (shared across sessions)
+        
+        _version parameter forces cache invalidation when incremented
+        """
         from src.features.matchup_features import MatchupFeatureBuilder
-        return MatchupFeatureBuilder(blend_mode="latest")
+        builder = MatchupFeatureBuilder(blend_mode="latest")
+        return builder
     
     @st.cache_data(ttl=600)  # Cache injury data for 10 minutes
     def preload_injury_data():
