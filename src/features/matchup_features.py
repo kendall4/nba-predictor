@@ -197,14 +197,17 @@ class MatchupFeatureBuilder:
         offensive_fit = 1.0
         defensive_matchup = 1.0
         
-        # Recent form adjustment (if enabled)
+        # Recent form adjustment (if enabled) - Skip if weight is 0 to save time
         recent_form_multiplier = 1.0
         if recent_form_weight > 0:
             try:
                 from src.analysis.hot_hand_tracker import HotHandTracker
-                hot_tracker = HotHandTracker(blend_mode="latest")
+                # Use cached instance if available, otherwise create new one
+                if not hasattr(self, '_hot_tracker'):
+                    self._hot_tracker = HotHandTracker(blend_mode="latest")
+                hot_tracker = self._hot_tracker
                 
-                # Get last 5 games average
+                # Get last 5 games average (with timeout protection)
                 game_log = hot_tracker.get_player_gamelog(player_name, season='2025-26')
                 if game_log is not None and len(game_log) >= 5:
                     last_5_pts = game_log.head(5)['PTS'].mean()
@@ -230,11 +233,12 @@ class MatchupFeatureBuilder:
                 # If recent form check fails, continue without it
                 pass
         
-        # H2H adjustment (if enabled)
+        # H2H adjustment (if enabled) - Skip if weight is 0 to save time
         h2h_multiplier = 1.0
         if h2h_weight > 0:
             try:
                 from src.utils.h2h_stats import get_h2h_summary
+                # Quick check - only fetch if weight is significant
                 h2h = get_h2h_summary(player_name, opponent_team, season='2025-26')
                 if h2h and h2h.get('total_games', 0) >= 2:
                     # Compare H2H average to season average
@@ -263,12 +267,15 @@ class MatchupFeatureBuilder:
         if system_fit_weight > 0:
             try:
                 from src.services.system_profile_analyzer import SystemProfileAnalyzer
-                profile_analyzer = SystemProfileAnalyzer()
+                # Use cached instance if available (profiles are cached internally)
+                if not hasattr(self, '_profile_analyzer'):
+                    self._profile_analyzer = SystemProfileAnalyzer()
+                profile_analyzer = self._profile_analyzer
                 
-                # Get offensive profile (player's team)
+                # Get offensive profile (player's team) - cached internally
                 team_off_profile = profile_analyzer.get_offensive_profile(player['TEAM_ABBREVIATION'])
                 
-                # Get defensive profile (opponent)
+                # Get defensive profile (opponent) - cached internally
                 opponent_def_profile = profile_analyzer.get_defensive_profile(opponent_team)
                 
                 # Calculate player-system fit
@@ -389,6 +396,22 @@ class MatchupFeatureBuilder:
             game_teams.add(game['away'])
         players_today = self.players[self.players['TEAM_ABBREVIATION'].isin(game_teams)]
         
+        # Pre-initialize analyzers if weights are enabled (to cache instances)
+        if system_fit_weight > 0:
+            if not hasattr(self, '_profile_analyzer'):
+                from src.services.system_profile_analyzer import SystemProfileAnalyzer
+                self._profile_analyzer = SystemProfileAnalyzer()
+                # Pre-cache all team profiles for today's games
+                for team in game_teams:
+                    self._profile_analyzer.get_offensive_profile(team)
+                    self._profile_analyzer.get_defensive_profile(team)
+        
+        if recent_form_weight > 0:
+            if not hasattr(self, '_hot_tracker'):
+                from src.analysis.hot_hand_tracker import HotHandTracker
+                self._hot_tracker = HotHandTracker(blend_mode="latest")
+        
+        total_players = 0
         for game in games_today:
             home = game['home']
             away = game['away']
@@ -407,7 +430,26 @@ class MatchupFeatureBuilder:
             else:
                 away_players = away_players.drop_duplicates(subset=['PLAYER_NAME'])
             
-            # Build features for each player
+            total_players += len(home_players) + len(away_players)
+        
+        # Build features for each player
+        processed = 0
+        for game in games_today:
+            home = game['home']
+            away = game['away']
+            
+            home_players = players_today[players_today['TEAM_ABBREVIATION'] == home]
+            away_players = players_today[players_today['TEAM_ABBREVIATION'] == away]
+            
+            if 'PLAYER_ID' in home_players.columns:
+                home_players = home_players.drop_duplicates(subset=['PLAYER_ID'])
+            else:
+                home_players = home_players.drop_duplicates(subset=['PLAYER_NAME'])
+            if 'PLAYER_ID' in away_players.columns:
+                away_players = away_players.drop_duplicates(subset=['PLAYER_ID'])
+            else:
+                away_players = away_players.drop_duplicates(subset=['PLAYER_NAME'])
+            
             for _, player in home_players.iterrows():
                 features = self.get_player_features(
                     player['PLAYER_NAME'], away, 
@@ -417,6 +459,7 @@ class MatchupFeatureBuilder:
                 )
                 if features:
                     all_features.append(features)
+                processed += 1
             
             for _, player in away_players.iterrows():
                 features = self.get_player_features(
@@ -427,6 +470,7 @@ class MatchupFeatureBuilder:
                 )
                 if features:
                     all_features.append(features)
+                processed += 1
         
         return pd.DataFrame(all_features)
 

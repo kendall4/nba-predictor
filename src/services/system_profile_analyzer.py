@@ -20,6 +20,7 @@ class SystemProfileAnalyzer:
     def __init__(self):
         self.team_stats = None
         self.league_averages = {}
+        self._team_profiles_cache = {}  # Cache team profiles to avoid recalculating
         self._load_team_data()
     
     def _load_team_data(self):
@@ -69,7 +70,7 @@ class SystemProfileAnalyzer:
     
     def get_offensive_profile(self, team_abbr: str) -> Dict:
         """
-        Get team's offensive system profile
+        Get team's offensive system profile (cached)
         
         Returns:
             Dict with offensive style characteristics:
@@ -78,16 +79,26 @@ class SystemProfileAnalyzer:
             - style: 'Run-and-Gun', 'Half-Court', 'Balanced', etc.
             - shot_preference: '3PT Heavy', 'Paint Heavy', 'Balanced'
         """
-        if self.team_stats is None:
-            return self._default_profile()
-        
         team_abbr = team_abbr.upper()
+        
+        # Check cache first
+        cache_key = f"off_{team_abbr}"
+        if cache_key in self._team_profiles_cache:
+            return self._team_profiles_cache[cache_key]
+        
+        if self.team_stats is None:
+            profile = self._default_profile()
+            self._team_profiles_cache[cache_key] = profile
+            return profile
+        
         team_row = self.team_stats[
             self.team_stats['TEAM_ABBREVIATION'] == team_abbr
         ]
         
         if len(team_row) == 0:
-            return self._default_profile()
+            profile = self._default_profile()
+            self._team_profiles_cache[cache_key] = profile
+            return profile
         
         team = team_row.iloc[0]
         avg_pace = self.league_averages.get('pace', 98.0)
@@ -124,7 +135,7 @@ class SystemProfileAnalyzer:
         else:
             style = 'Balanced'
         
-        return {
+        profile = {
             'pace': pace,
             'pace_tier': pace_tier,
             'off_rating': off_rating,
@@ -133,10 +144,14 @@ class SystemProfileAnalyzer:
             'pace_vs_avg': pace - avg_pace,
             'off_rating_vs_avg': off_rating - avg_off_rating
         }
+        
+        # Cache the profile
+        self._team_profiles_cache[cache_key] = profile
+        return profile
     
     def get_defensive_profile(self, team_abbr: str) -> Dict:
         """
-        Get team's defensive system profile
+        Get team's defensive system profile (cached)
         
         Returns:
             Dict with defensive style characteristics:
@@ -144,16 +159,26 @@ class SystemProfileAnalyzer:
             - efficiency: 'Elite', 'Good', 'Average', 'Poor'
             - style: 'Aggressive', 'Conservative', 'Balanced'
         """
-        if self.team_stats is None:
-            return self._default_defensive_profile()
-        
         team_abbr = team_abbr.upper()
+        
+        # Check cache first
+        cache_key = f"def_{team_abbr}"
+        if cache_key in self._team_profiles_cache:
+            return self._team_profiles_cache[cache_key]
+        
+        if self.team_stats is None:
+            profile = self._default_defensive_profile()
+            self._team_profiles_cache[cache_key] = profile
+            return profile
+        
         team_row = self.team_stats[
             self.team_stats['TEAM_ABBREVIATION'] == team_abbr
         ]
         
         if len(team_row) == 0:
-            return self._default_defensive_profile()
+            profile = self._default_defensive_profile()
+            self._team_profiles_cache[cache_key] = profile
+            return profile
         
         team = team_row.iloc[0]
         avg_def_rating = self.league_averages.get('def_rating', 112.0)
@@ -187,13 +212,17 @@ class SystemProfileAnalyzer:
         else:
             style = 'Balanced'
         
-        return {
+        profile = {
             'def_rating': def_rating,
             'efficiency': efficiency,
             'pressure': pressure,
             'style': style,
             'def_rating_vs_avg': def_rating - avg_def_rating
         }
+        
+        # Cache the profile
+        self._team_profiles_cache[cache_key] = profile
+        return profile
     
     def calculate_player_system_fit(self, player_stats: Dict, team_off_profile: Dict, 
                                      opponent_def_profile: Dict) -> Dict:
