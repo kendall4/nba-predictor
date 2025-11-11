@@ -19,16 +19,26 @@ class ValueAnalyzer:
             ValueAnalyzer._builder = MatchupFeatureBuilder(blend_mode="latest")
         self.builder = ValueAnalyzer._builder
     
-    def analyze_games(self, games_today, odds_lines=None):
+    def analyze_games(self, games_today, odds_lines=None, system_fit_weight: float = 0.0,
+                     recent_form_weight: float = 0.0, h2h_weight: float = 0.0):
         """
         Analyze all players in today's games
         
-        games_today: [{'home': 'LAL', 'away': 'GSW'}, ...]
-        odds_lines: {'Luka Dončić': {'points': 28.5, 'rebounds': 8.5}, ...}
+        Args:
+            games_today: [{'home': 'LAL', 'away': 'GSW'}, ...]
+            odds_lines: {'Luka Dončić': {'points': 28.5, 'rebounds': 8.5}, ...}
+            system_fit_weight: Weight for system fit adjustment (0.0 = disabled, 1.0 = full weight)
+            recent_form_weight: Weight for recent form (last 5 games) adjustment
+            h2h_weight: Weight for head-to-head performance adjustment
         """
         
         # Get predictions for all players
-        predictions = self.builder.get_all_matchups(games_today)
+        predictions = self.builder.get_all_matchups(
+            games_today, 
+            system_fit_weight=system_fit_weight,
+            recent_form_weight=recent_form_weight,
+            h2h_weight=h2h_weight
+        )
         
         # If no odds provided, create mock odds (season average + small variance)
         if odds_lines is None:
@@ -87,7 +97,14 @@ class ValueAnalyzer:
                 # Context
                 'opponent_def_rating': player['opponent_def_rating'],
                 'expected_pace': player['expected_pace'],
-                'minutes': player['minutes']
+                'minutes': player['minutes'],
+                
+                # System fit data (if available)
+                'system_fit_multiplier': player.get('system_fit_multiplier', 1.0),
+                'offensive_fit': player.get('offensive_fit', 1.0),
+                'defensive_matchup': player.get('defensive_matchup', 1.0),
+                'recent_form_multiplier': player.get('recent_form_multiplier', 1.0),
+                'h2h_multiplier': player.get('h2h_multiplier', 1.0)
             })
         
         return pd.DataFrame(values).sort_values('overall_value', ascending=False)

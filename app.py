@@ -129,6 +129,30 @@ with st.sidebar:
     st.subheader("🏥 Injury Filtering")
     filter_injured = st.toggle("Filter injured/out players", value=True, help="Excludes players marked 'Out' from predictions. This applies to ALL tabs.")
     include_questionable = st.toggle("Include questionable players", value=True, help="Shows players with 'Questionable' status (with warning)")
+    st.markdown("---")
+    st.subheader("⚙️ Prediction Weights")
+    st.caption("Adjust how much different factors influence predictions")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        system_fit_weight = st.slider(
+            "System Fit Weight", 0.0, 1.0, 0.3, 0.1, 
+            help="How much offensive/defensive system profiles affect predictions. Higher = more weight on player-system fit."
+        )
+        st.caption("💡 Offensive style (pace, efficiency) + defensive matchup")
+    
+    with col2:
+        recent_form_weight = st.slider(
+            "Recent Form Weight", 0.0, 1.0, 0.2, 0.1,
+            help="How much recent performance (last 5 games) affects predictions. Higher = more weight on hot/cold streaks."
+        )
+        st.caption("💡 Last 5 games vs season average")
+    
+    h2h_weight = st.slider(
+        "Head-to-Head Weight", 0.0, 1.0, 0.15, 0.1,
+        help="How much historical performance vs this opponent affects predictions. Higher = more weight on H2H trends."
+    )
+    st.caption("💡 Player's historical stats vs this specific opponent")
 
 # Get today's games
 @st.cache_data(ttl=300)  # Cache for 5 minutes
@@ -349,7 +373,12 @@ with tab_nba:
             analyzer.builder = st.session_state['builder']
         
         # Generate ALL predictions first (before filters) - this ensures NOP players are included
-        predictions_raw = analyzer.analyze_games(games)
+        predictions_raw = analyzer.analyze_games(
+            games, 
+            system_fit_weight=system_fit_weight,
+            recent_form_weight=recent_form_weight,
+            h2h_weight=h2h_weight
+        )
         st.session_state['predictions_raw'] = predictions_raw
         
         # Debug: Show teams found

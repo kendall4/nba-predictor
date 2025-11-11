@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
+from typing import Dict, Optional
 
 class MatchupFeatureBuilder:
     """
@@ -114,15 +115,26 @@ class MatchupFeatureBuilder:
             print(f"  Teams:   {len(self.pace)} teams with blended ratings")
             print(f"  📊 Using heuristic predictions (train ML models for better accuracy)")
     
-    def get_player_features(self, player_name, opponent_team):
+    def get_player_features(self, player_name, opponent_team, system_fit_weight: float = 0.0, 
+                           recent_form_weight: float = 0.0, h2h_weight: float = 0.0):
         """
         Build features for: Player X vs Opponent Y
+        
+        Args:
+            player_name: Name of player
+            opponent_team: Opponent team abbreviation
+            system_fit_weight: Weight for system fit adjustment (0.0 = disabled, 1.0 = full weight)
+            recent_form_weight: Weight for recent form (last 5 games) adjustment
+            h2h_weight: Weight for head-to-head performance adjustment
         
         Returns dict with:
         - Player's season averages
         - Opponent's defensive rating
         - Expected pace of game
         - Predicted points/rebounds/assists
+        - System fit adjustments (if enabled)
+        - Recent form adjustments (if enabled)
+        - H2H adjustments (if enabled)
         """
         
         # Find player - try exact match first, then case-insensitive, then fuzzy
@@ -180,6 +192,111 @@ class MatchupFeatureBuilder:
             def_rating = 112.0
         def_factor = def_rating / 112.0
         
+        # System fit adjustment (if enabled)
+        system_fit_multiplier = 1.0
+        offensive_fit = 1.0
+        defensive_matchup = 1.0
+        
+        # Recent form adjustment (if enabled)
+        recent_form_multiplier = 1.0
+        if recent_form_weight > 0:
+            try:
+                from src.analysis.hot_hand_tracker import HotHandTracker
+                hot_tracker = HotHandTracker(blend_mode="latest")
+                
+                # Get last 5 games average
+                game_log = hot_tracker.get_player_gamelog(player_name, season='2025-26')
+                if game_log is not None and len(game_log) >= 5:
+                    last_5_pts = game_log.head(5)['PTS'].mean()
+                    last_5_reb = game_log.head(5)['REB'].mean()
+                    last_5_ast = game_log.head(5)['AST'].mean()
+                    
+                    # Compare to season average
+                    season_pts = player['PTS']
+                    season_reb = player['REB']
+                    season_ast = player['AST']
+                    
+                    # Calculate form factor (1.0 = same as season, >1.0 = hot, <1.0 = cold)
+                    pts_form = last_5_pts / season_pts if season_pts > 0 else 1.0
+                    reb_form = last_5_reb / season_reb if season_reb > 0 else 1.0
+                    ast_form = last_5_ast / season_ast if season_ast > 0 else 1.0
+                    
+                    # Weighted average form (points weighted more)
+                    avg_form = (pts_form * 0.5) + (reb_form * 0.25) + (ast_form * 0.25)
+                    
+                    # Apply weight: 1.0 + (form - 1.0) * weight
+                    recent_form_multiplier = 1.0 + (avg_form - 1.0) * recent_form_weight
+            except Exception:
+                # If recent form check fails, continue without it
+                pass
+        
+        # H2H adjustment (if enabled)
+        h2h_multiplier = 1.0
+        if h2h_weight > 0:
+            try:
+                from src.utils.h2h_stats import get_h2h_summary
+                h2h = get_h2h_summary(player_name, opponent_team, season='2025-26')
+                if h2h and h2h.get('total_games', 0) >= 2:
+                    # Compare H2H average to season average
+                    h2h_pts = h2h.get('avg_pts', 0)
+                    h2h_reb = h2h.get('avg_reb', 0)
+                    h2h_ast = h2h.get('avg_ast', 0)
+                    
+                    season_pts = player['PTS']
+                    season_reb = player['REB']
+                    season_ast = player['AST']
+                    
+                    # Calculate H2H factor
+                    pts_h2h = h2h_pts / season_pts if season_pts > 0 else 1.0
+                    reb_h2h = h2h_reb / season_reb if season_reb > 0 else 1.0
+                    ast_h2h = h2h_ast / season_ast if season_ast > 0 else 1.0
+                    
+                    # Weighted average
+                    avg_h2h = (pts_h2h * 0.5) + (reb_h2h * 0.25) + (ast_h2h * 0.25)
+                    
+                    # Apply weight
+                    h2h_multiplier = 1.0 + (avg_h2h - 1.0) * h2h_weight
+            except Exception:
+                # If H2H check fails, continue without it
+                pass
+        
+        if system_fit_weight > 0:
+            try:
+                from src.services.system_profile_analyzer import SystemProfileAnalyzer
+                profile_analyzer = SystemProfileAnalyzer()
+                
+                # Get offensive profile (player's team)
+                team_off_profile = profile_analyzer.get_offensive_profile(player['TEAM_ABBREVIATION'])
+                
+                # Get defensive profile (opponent)
+                opponent_def_profile = profile_analyzer.get_defensive_profile(opponent_team)
+                
+                # Calculate player-system fit
+                player_stats = {
+                    'PTS': player['PTS'],
+                    'REB': player['REB'],
+                    'AST': player['AST'],
+                    'MIN': player['MIN']
+                }
+                
+                fit_data = profile_analyzer.calculate_player_system_fit(
+                    player_stats, team_off_profile, opponent_def_profile
+                )
+                
+                offensive_fit = fit_data['offensive_fit']
+                defensive_matchup = fit_data['defensive_matchup']
+                
+                # Apply weighted system fit
+                # system_fit_multiplier = 1.0 + (fit_data['fit_score'] - 1.0) * system_fit_weight
+                # More nuanced: blend offensive fit and defensive matchup
+                system_fit_multiplier = 1.0 + (
+                    (offensive_fit - 1.0) * 0.6 + (defensive_matchup - 1.0) * 0.4
+                ) * system_fit_weight
+                
+            except Exception:
+                # If system profile fails, continue without it
+                pass
+        
         # Build features
         features = {
             'player_name': player_name,
@@ -200,6 +317,15 @@ class MatchupFeatureBuilder:
             'opponent_off_rating': float(opp['OFF_RATING']) if float(opp['OFF_RATING']) <= 130 else 110.0,  # Cap OFF_RATING too
             'pace_factor': pace_factor,
             'def_factor': def_factor,
+            
+            # System fit (if enabled)
+            'system_fit_multiplier': system_fit_multiplier,
+            'offensive_fit': offensive_fit,
+            'defensive_matchup': defensive_matchup,
+            
+            # Recent form and H2H (if enabled)
+            'recent_form_multiplier': recent_form_multiplier,
+            'h2h_multiplier': h2h_multiplier,
         }
         
         # PREDICTION: Use ML if available, else heuristics
@@ -220,26 +346,39 @@ class MatchupFeatureBuilder:
             ]])
             
             # ML predictions
-            features['predicted_points'] = float(self.ml_models['PTS'].predict(feature_array)[0])
-            features['predicted_rebounds'] = float(self.ml_models['REB'].predict(feature_array)[0])
-            features['predicted_assists'] = float(self.ml_models['AST'].predict(feature_array)[0])
+            base_points = float(self.ml_models['PTS'].predict(feature_array)[0])
+            base_rebounds = float(self.ml_models['REB'].predict(feature_array)[0])
+            base_assists = float(self.ml_models['AST'].predict(feature_array)[0])
+            
+            # Apply all multipliers if enabled
+            combined_multiplier = system_fit_multiplier * recent_form_multiplier * h2h_multiplier
+            features['predicted_points'] = base_points * combined_multiplier
+            features['predicted_rebounds'] = base_rebounds * combined_multiplier
+            features['predicted_assists'] = base_assists * combined_multiplier
         else:
             # Fallback to heuristics (simple multipliers)
-            features['predicted_points'] = player['PTS'] * pace_factor * def_factor
-            features['predicted_rebounds'] = player['REB'] * pace_factor
-            features['predicted_assists'] = player['AST'] * pace_factor
+            # Apply all multipliers if enabled
+            base_points = player['PTS'] * pace_factor * def_factor
+            base_rebounds = player['REB'] * pace_factor
+            base_assists = player['AST'] * pace_factor
+            
+            combined_multiplier = system_fit_multiplier * recent_form_multiplier * h2h_multiplier
+            features['predicted_points'] = base_points * combined_multiplier
+            features['predicted_rebounds'] = base_rebounds * combined_multiplier
+            features['predicted_assists'] = base_assists * combined_multiplier
         
         return features
     
-    def get_all_matchups(self, games_today):
+    def get_all_matchups(self, games_today, system_fit_weight: float = 0.0, 
+                        recent_form_weight: float = 0.0, h2h_weight: float = 0.0):
         """
         Get features for all players in today's games
         
-        games_today format:
-        [
-            {'home': 'LAL', 'away': 'GSW'},
-            {'home': 'BOS', 'away': 'MIA'},
-        ]
+        Args:
+            games_today: List of games [{'home': 'LAL', 'away': 'GSW'}, ...]
+            system_fit_weight: Weight for system fit adjustment (0.0 = disabled, 1.0 = full weight)
+            recent_form_weight: Weight for recent form adjustment (0.0 = disabled, 1.0 = full weight)
+            h2h_weight: Weight for head-to-head adjustment (0.0 = disabled, 1.0 = full weight)
         """
         all_features = []
         
@@ -270,12 +409,22 @@ class MatchupFeatureBuilder:
             
             # Build features for each player
             for _, player in home_players.iterrows():
-                features = self.get_player_features(player['PLAYER_NAME'], away)
+                features = self.get_player_features(
+                    player['PLAYER_NAME'], away, 
+                    system_fit_weight=system_fit_weight,
+                    recent_form_weight=recent_form_weight,
+                    h2h_weight=h2h_weight
+                )
                 if features:
                     all_features.append(features)
             
             for _, player in away_players.iterrows():
-                features = self.get_player_features(player['PLAYER_NAME'], home)
+                features = self.get_player_features(
+                    player['PLAYER_NAME'], home,
+                    system_fit_weight=system_fit_weight,
+                    recent_form_weight=recent_form_weight,
+                    h2h_weight=h2h_weight
+                )
                 if features:
                     all_features.append(features)
         
