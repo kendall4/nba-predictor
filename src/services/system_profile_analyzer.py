@@ -21,10 +21,14 @@ class SystemProfileAnalyzer:
         self.team_stats = None
         self.league_averages = {}
         self._team_profiles_cache = {}  # Cache team profiles to avoid recalculating
-        self._load_team_data()
+        # Don't load team data in __init__ - lazy load when needed
     
     def _load_team_data(self):
-        """Load team stats for profile analysis"""
+        """Load team stats for profile analysis (lazy load, cached)"""
+        # Only load once
+        if self.team_stats is not None:
+            return
+        
         current_season = '2025-26'
         prev_season = '2024-25'
         
@@ -85,6 +89,10 @@ class SystemProfileAnalyzer:
         cache_key = f"off_{team_abbr}"
         if cache_key in self._team_profiles_cache:
             return self._team_profiles_cache[cache_key]
+        
+        # Lazy load team data (only once)
+        if self.team_stats is None:
+            self._load_team_data()
         
         if self.team_stats is None:
             profile = self._default_profile()
@@ -159,6 +167,10 @@ class SystemProfileAnalyzer:
             - efficiency: 'Elite', 'Good', 'Average', 'Poor'
             - style: 'Aggressive', 'Conservative', 'Balanced'
         """
+        # Lazy load team data (only once)
+        if self.team_stats is None:
+            self._load_team_data()
+        
         team_abbr = team_abbr.upper()
         
         # Check cache first

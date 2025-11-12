@@ -391,18 +391,34 @@ with tab_nba:
             analyzer.builder = st.session_state['builder']
         
         # Generate ALL predictions first (before filters) - this ensures NOP players are included
-        predictions_raw = analyzer.analyze_games(
-            games, 
-            system_fit_weight=system_fit_weight,
-            recent_form_weight=recent_form_weight,
-            h2h_weight=h2h_weight
-        )
-        st.session_state['predictions_raw'] = predictions_raw
-        
-        # Debug: Show teams found
-        if len(predictions_raw) > 0:
-            teams_found = sorted(predictions_raw['team'].unique().tolist())
-            status_placeholder.info(f"🔄 Generating predictions... Found players from {len(teams_found)} teams: {', '.join(teams_found)}")
+        # Add timeout protection and progress updates
+        try:
+            # Show progress message
+            progress_msg = "🔄 Generating predictions..."
+            if recent_form_weight > 0 or h2h_weight > 0:
+                progress_msg += " (Using cached data only - should be fast)"
+            
+            with st.spinner(progress_msg):
+                predictions_raw = analyzer.analyze_games(
+                    games, 
+                    system_fit_weight=system_fit_weight,
+                    recent_form_weight=recent_form_weight,
+                    h2h_weight=h2h_weight
+                )
+            st.session_state['predictions_raw'] = predictions_raw
+            
+            # Clear the spinner and show success
+            if len(predictions_raw) > 0:
+                teams_found = sorted(predictions_raw['team'].unique().tolist())
+                status_placeholder.success(f"✅ Generated {len(predictions_raw)} predictions for {len(teams_found)} teams")
+            else:
+                status_placeholder.warning("⚠️ Generated 0 predictions - check if games are scheduled")
+        except Exception as e:
+            status_placeholder.error(f"❌ Error generating predictions: {str(e)}")
+            import traceback
+            with st.expander("Error details"):
+                st.code(traceback.format_exc())
+            st.stop()
         
         # Apply filters
         predictions = predictions_raw.copy()

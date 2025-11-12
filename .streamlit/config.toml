@@ -3,6 +3,8 @@ port = 8501
 headless = true
 enableCORS = false
 enableXsrfProtection = true
+fileWatcherType = "auto"
+runOnSave = true
 
 [theme]
 primaryColor = "#00e5b0"

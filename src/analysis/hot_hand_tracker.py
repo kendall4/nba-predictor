@@ -98,7 +98,11 @@ class HotHandTracker:
         
         for attempt in range(max_retries + 1):
             try:
-                logs = playergamelog.PlayerGameLog(player_id=pid, season=season, season_type_all_star='Regular Season')
+                logs = playergamelog.PlayerGameLog(
+                    player_id=pid, 
+                    season=season, 
+                    season_type_all_star='Regular Season'
+                )
                 df = logs.get_data_frames()[0]
                 
                 # Check if dataframe is empty (no games in season yet)

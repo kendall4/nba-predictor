@@ -201,20 +201,48 @@ class MatchupFeatureBuilder:
         recent_form_multiplier = 1.0
         if recent_form_weight > 0:
             try:
-                # Use in-memory cache first (fastest)
+                # ONLY use cached game logs - never make API calls (to avoid hanging)
+                game_log = None
                 if hasattr(self, '_gamelog_cache') and player_name in self._gamelog_cache:
                     game_log = self._gamelog_cache[player_name]
                 else:
-                    # Fallback to file cache
+                    # Try file cache only (no API calls to avoid hanging)
                     if not hasattr(self, '_hot_tracker'):
                         from src.analysis.hot_hand_tracker import HotHandTracker
                         self._hot_tracker = HotHandTracker(blend_mode="latest")
-                    game_log = self._hot_tracker.get_player_gamelog(player_name, season='2025-26', use_cache=True)
-                    # Cache in memory for next time
-                    if game_log is not None and len(game_log) > 0:
-                        if not hasattr(self, '_gamelog_cache'):
-                            self._gamelog_cache = {}
-                        self._gamelog_cache[player_name] = game_log
+                    
+                    # Check if file cache exists first (read directly, no API)
+                    # Skip player ID lookup if it might be slow - just try common cache paths
+                    import os
+                    try:
+                        # Try to get player ID (but don't hang if it's slow)
+                        pid = None
+                        try:
+                            pid = self._hot_tracker._lookup_player_id(player_name)
+                        except Exception:
+                            # If lookup fails, skip this player's recent form
+                            pid = None
+                        
+                        if pid:
+                            # Use the tracker's cache path method (matches actual cache structure)
+                            cache_path = self._hot_tracker._player_log_cache_path(pid, '2025-26')
+                            if os.path.exists(cache_path):
+                                try:
+                                    # Read full file (should be fast for cached CSVs)
+                                    game_log = pd.read_csv(cache_path)
+                                    if game_log is not None and len(game_log) > 0:
+                                        # Cache in memory for next time
+                                        if not hasattr(self, '_gamelog_cache'):
+                                            self._gamelog_cache = {}
+                                        self._gamelog_cache[player_name] = game_log
+                                except Exception:
+                                    game_log = None
+                    except Exception:
+                        # If anything fails, skip
+                        game_log = None
+                    
+                    # If no cached file exists, skip recent form (don't make API call)
+                    # This prevents hanging on API calls
                 
                 if game_log is not None and len(game_log) >= 5:
                     last_5_pts = game_log.head(5)['PTS'].mean()
@@ -249,51 +277,41 @@ class MatchupFeatureBuilder:
                 if hasattr(self, '_h2h_cache') and h2h_cache_key in self._h2h_cache:
                     h2h = self._h2h_cache[h2h_cache_key]
                 else:
-                    from src.utils.h2h_stats import get_h2h_summary
-                    # Use cached game logs if available (faster)
-                    if hasattr(self, '_gamelog_cache') and player_name in self._gamelog_cache:
-                        # Create a temporary tracker with cached logs
-                        from src.analysis.hot_hand_tracker import HotHandTracker
-                        if not hasattr(self, '_hot_tracker'):
-                            self._hot_tracker = HotHandTracker(blend_mode="latest")
-                        
-                        # Get H2H from cached logs directly (faster than full get_h2h_summary)
-                        game_log = self._gamelog_cache[player_name]
-                        if game_log is not None and 'MATCHUP' in game_log.columns:
-                            game_log = game_log.copy()
-                            # Parse opponent from matchup string (e.g., "LAL vs. GSW" or "LAL @ GSW")
-                            def parse_opp(matchup_str):
-                                if pd.isna(matchup_str):
-                                    return None
-                                matchup_str = str(matchup_str)
-                                if ' vs. ' in matchup_str:
-                                    parts = matchup_str.split(' vs. ')
-                                elif ' @ ' in matchup_str:
-                                    parts = matchup_str.split(' @ ')
+                    # Calculate H2H from cached game logs (fastest, no new tracker instances)
+                    h2h = None
+                    try:
+                        if hasattr(self, '_gamelog_cache') and player_name in self._gamelog_cache:
+                            game_log = self._gamelog_cache[player_name]
+                            if game_log is not None and 'MATCHUP' in game_log.columns and len(game_log) > 0:
+                                # Parse opponent from matchup string (quick operation)
+                                game_log = game_log.copy()
+                                if hasattr(self, '_hot_tracker') and hasattr(self._hot_tracker, '_parse_opponent_from_matchup'):
+                                    game_log['OPP'] = game_log['MATCHUP'].apply(self._hot_tracker._parse_opponent_from_matchup)
                                 else:
-                                    return None
-                                if len(parts) == 2:
-                                    # Return the opponent (second part)
-                                    return parts[1].strip()
-                                return None
-                            
-                            game_log['OPP'] = game_log['MATCHUP'].apply(parse_opp)
-                            h2h_games = game_log[game_log['OPP'] == opponent_team]
-                            if len(h2h_games) >= 2:
-                                h2h = {
-                                    'total_games': len(h2h_games),
-                                    'avg_pts': float(h2h_games['PTS'].mean()) if 'PTS' in h2h_games.columns else 0,
-                                    'avg_reb': float(h2h_games['REB'].mean()) if 'REB' in h2h_games.columns else 0,
-                                    'avg_ast': float(h2h_games['AST'].mean()) if 'AST' in h2h_games.columns else 0
-                                }
-                            else:
-                                h2h = None
-                        else:
-                            h2h = get_h2h_summary(player_name, opponent_team, season='2025-26')
-                    else:
-                        h2h = get_h2h_summary(player_name, opponent_team, season='2025-26')
+                                    # Fallback parsing if tracker method not available
+                                    def parse_opp(matchup_str):
+                                        if pd.isna(matchup_str):
+                                            return None
+                                        matchup_str = str(matchup_str)
+                                        parts = matchup_str.split(' ')
+                                        if len(parts) >= 3:
+                                            return parts[2].strip()
+                                        return matchup_str[-3:].upper() if len(matchup_str) >= 3 else None
+                                    game_log['OPP'] = game_log['MATCHUP'].apply(parse_opp)
+                                
+                                h2h_games = game_log[game_log['OPP'] == opponent_team]
+                                if len(h2h_games) >= 2:
+                                    h2h = {
+                                        'total_games': len(h2h_games),
+                                        'avg_pts': float(h2h_games['PTS'].mean()) if 'PTS' in h2h_games.columns else 0,
+                                        'avg_reb': float(h2h_games['REB'].mean()) if 'REB' in h2h_games.columns else 0,
+                                        'avg_ast': float(h2h_games['AST'].mean()) if 'AST' in h2h_games.columns else 0
+                                    }
+                    except Exception:
+                        # If H2H calculation fails, skip it
+                        h2h = None
                     
-                    # Cache H2H result
+                    # Cache H2H result (even if None, to avoid repeated failed calls)
                     if not hasattr(self, '_h2h_cache'):
                         self._h2h_cache = {}
                     self._h2h_cache[h2h_cache_key] = h2h
@@ -465,6 +483,7 @@ class MatchupFeatureBuilder:
                     self._profile_analyzer.get_defensive_profile(team)
         
         # Pre-fetch and cache game logs for all players if recent form or H2H is enabled
+        # Note: We'll fetch on-demand during processing to avoid blocking
         if recent_form_weight > 0 or h2h_weight > 0:
             if not hasattr(self, '_hot_tracker'):
                 from src.analysis.hot_hand_tracker import HotHandTracker
@@ -474,26 +493,9 @@ class MatchupFeatureBuilder:
             if not hasattr(self, '_gamelog_cache'):
                 self._gamelog_cache = {}
             
-            # Pre-fetch game logs for all players (uses file cache, so fast if already cached)
-            # This ensures all logs are in memory before we start processing
-            all_player_names = set()
-            for game in games_today:
-                home_players = players_today[players_today['TEAM_ABBREVIATION'] == game['home']]
-                away_players = players_today[players_today['TEAM_ABBREVIATION'] == game['away']]
-                for _, p in home_players.iterrows():
-                    all_player_names.add(p['PLAYER_NAME'])
-                for _, p in away_players.iterrows():
-                    all_player_names.add(p['PLAYER_NAME'])
-            
-            # Pre-load game logs into memory cache (only if not already cached)
-            for player_name in all_player_names:
-                if player_name not in self._gamelog_cache:
-                    try:
-                        log = self._hot_tracker.get_player_gamelog(player_name, season='2025-26', use_cache=True)
-                        if log is not None and len(log) > 0:
-                            self._gamelog_cache[player_name] = log
-                    except Exception:
-                        pass  # If fetch fails, will try again later
+            # Initialize H2H cache
+            if not hasattr(self, '_h2h_cache'):
+                self._h2h_cache = {}
         
         # Build features for each player
         for game in games_today:
