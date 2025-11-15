@@ -12,7 +12,7 @@ class ValueAnalyzer:
     
     # Cache the builder instance to avoid reloading data every time
     _builder = None
-    _builder_version = 2  # Increment when signature changes
+    _builder_version = 4  # Increment when signature changes (v4: added upside_weight for ceiling/upside potential)
     
     def __init__(self, force_reload: bool = False):
         # Reuse builder instance if already created (performance optimization)
@@ -22,7 +22,9 @@ class ValueAnalyzer:
         self.builder = ValueAnalyzer._builder
     
     def analyze_games(self, games_today, odds_lines=None, system_fit_weight: float = 0.0,
-                     recent_form_weight: float = 0.0, h2h_weight: float = 0.0):
+                     recent_form_weight: float = 0.0, h2h_weight: float = 0.0,
+                     rest_days_weight: float = 0.0, home_away_weight: float = 0.0,
+                     play_style_weight: float = 0.0, upside_weight: float = 0.0):
         """
         Analyze all players in today's games
         
@@ -39,7 +41,11 @@ class ValueAnalyzer:
             games_today, 
             system_fit_weight=system_fit_weight,
             recent_form_weight=recent_form_weight,
-            h2h_weight=h2h_weight
+            h2h_weight=h2h_weight,
+            rest_days_weight=rest_days_weight,
+            home_away_weight=home_away_weight,
+            play_style_weight=play_style_weight,
+            upside_weight=upside_weight
         )
         
         # If no odds provided, create mock odds (season average + small variance)
@@ -68,7 +74,9 @@ class ValueAnalyzer:
             reb_value = player['predicted_rebounds'] - odds['rebounds']
             ast_value = player['predicted_assists'] - odds['assists']
             
-            # Value score (positive = we predict OVER the line)
+            # Separate value scores for each stat (primary metric)
+            # Value score (positive = we predict OVER the line, negative = UNDER)
+            # Keep overall_value for backward compatibility, but separate scores are primary
             overall_value = (
                 point_value * 2 +  # Points worth 2x
                 reb_value * 1 +
@@ -90,10 +98,13 @@ class ValueAnalyzer:
                 'line_rebounds': odds['rebounds'],
                 'line_assists': odds['assists'],
                 
-                # Value (positive = bet OVER, negative = bet UNDER)
+                # Value scores (positive = bet OVER, negative = bet UNDER)
+                # These are the PRIMARY metrics - separate for each stat
                 'point_value': point_value,
                 'rebound_value': reb_value,
                 'assist_value': ast_value,
+                
+                # Overall value (weighted combination, kept for backward compatibility)
                 'overall_value': overall_value,
                 
                 # Context
@@ -106,7 +117,21 @@ class ValueAnalyzer:
                 'offensive_fit': player.get('offensive_fit', 1.0),
                 'defensive_matchup': player.get('defensive_matchup', 1.0),
                 'recent_form_multiplier': player.get('recent_form_multiplier', 1.0),
-                'h2h_multiplier': player.get('h2h_multiplier', 1.0)
+                'h2h_multiplier': player.get('h2h_multiplier', 1.0),
+                
+                # New weight factors (if available)
+                'rest_days_multiplier': player.get('rest_days_multiplier', 1.0),
+                'home_away_multiplier': player.get('home_away_multiplier', 1.0),
+                'play_style_multiplier': player.get('play_style_multiplier', 1.0),
+                'upside_points_multiplier': player.get('upside_points_multiplier', 1.0),
+                'upside_rebounds_multiplier': player.get('upside_rebounds_multiplier', 1.0),
+                'upside_assists_multiplier': player.get('upside_assists_multiplier', 1.0),
+                
+                # Additional info (for detailed views)
+                'rest_days_info': player.get('rest_days_info'),
+                'home_away_info': player.get('home_away_info'),
+                'play_style_info': player.get('play_style_info'),
+                'upside_info': player.get('upside_info')
             })
         
         return pd.DataFrame(values).sort_values('overall_value', ascending=False)

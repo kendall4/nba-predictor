@@ -63,7 +63,7 @@ def render_player_detail(player_name: str, predictions_df: pd.DataFrame = None):
                 st.caption(f"Today: {team} vs {opponent}")
     
     # Tabs for different views
-    tab1, tab2, tab3, tab4 = st.tabs(["📈 Visualizations", "📊 Advanced Stats", "📋 Game Log", "🏀 Team Matchup"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Visualizations", "📊 Advanced Stats", "📋 Game Log", "🏀 Team Matchup", "⚙️ Prediction Factors"])
     
     with tab1:
         # Mobile-style visualizations (main feature)
@@ -464,6 +464,188 @@ def render_player_detail(player_name: str, predictions_df: pd.DataFrame = None):
                             pts_matchup = matchup_analysis['points_matchup']
                             st.write(f"**Points:** {pts_matchup['advantage'].title()} matchup")
                             st.caption(f"Player avg: {pts_matchup['player_avg']:.1f} | Opponent allows: {pts_matchup['opponent_allows']:.1f}")
+    
+    with tab5:
+        # Prediction Factors
+        st.markdown("### ⚙️ Prediction Factors Breakdown")
+        st.caption("See how each weight factor affects this player's predictions")
+        
+        if predictions_df is not None and len(predictions_df) > 0:
+            player_pred = predictions_df[predictions_df['player_name'] == player_name]
+            if len(player_pred) > 0:
+                player = player_pred.iloc[0]
+                
+                # Overall prediction summary
+                st.markdown("#### 📊 Current Predictions")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Predicted Points", f"{player.get('pred_points', 0):.1f}")
+                with col2:
+                    st.metric("Predicted Rebounds", f"{player.get('pred_rebounds', 0):.1f}")
+                with col3:
+                    st.metric("Predicted Assists", f"{player.get('pred_assists', 0):.1f}")
+                
+                st.markdown("---")
+                st.markdown("#### ⚙️ Multiplier Breakdown")
+                
+                # System Fit
+                if 'system_fit_multiplier' in player:
+                    st.markdown("##### 🎯 System Fit")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        mult = player['system_fit_multiplier']
+                        delta_color = "normal" if mult > 1.0 else "inverse"
+                        st.metric("System Fit", f"{mult:.3f}x", 
+                                 delta=f"{((mult - 1.0) * 100):+.1f}%", 
+                                 delta_color=delta_color)
+                    with col2:
+                        off_fit = player.get('offensive_fit', 1.0)
+                        st.metric("Offensive Fit", f"{off_fit:.3f}x")
+                    with col3:
+                        def_match = player.get('defensive_matchup', 1.0)
+                        st.metric("Defensive Matchup", f"{def_match:.3f}x")
+                    st.caption("How well player fits team's offensive system and matches up vs opponent's defense")
+                
+                # Recent Form
+                if 'recent_form_multiplier' in player:
+                    st.markdown("##### 📈 Recent Form")
+                    mult = player['recent_form_multiplier']
+                    delta_color = "normal" if mult > 1.0 else "inverse"
+                    st.metric("Recent Form", f"{mult:.3f}x", 
+                             delta=f"{((mult - 1.0) * 100):+.1f}%", 
+                             delta_color=delta_color)
+                    st.caption("Last 5 games performance vs season average")
+                
+                # H2H
+                if 'h2h_multiplier' in player:
+                    st.markdown("##### 🆚 Head-to-Head")
+                    mult = player['h2h_multiplier']
+                    delta_color = "normal" if mult > 1.0 else "inverse"
+                    st.metric("H2H Multiplier", f"{mult:.3f}x", 
+                             delta=f"{((mult - 1.0) * 100):+.1f}%", 
+                             delta_color=delta_color)
+                    st.caption("Historical performance vs this specific opponent")
+                
+                # Rest Days
+                if 'rest_days_multiplier' in player:
+                    st.markdown("##### 😴 Rest Days")
+                    mult = player['rest_days_multiplier']
+                    rest_info = player.get('rest_days_info', {})
+                    if rest_info:
+                        days_rest = rest_info.get('days_rest', 'N/A')
+                        adj_type = rest_info.get('adjustment_type', 'Unknown')
+                        delta_color = "normal" if mult > 1.0 else "inverse"
+                        st.metric("Rest Days", f"{mult:.3f}x", 
+                                 delta=f"{((mult - 1.0) * 100):+.1f}%", 
+                                 delta_color=delta_color)
+                        st.caption(f"{adj_type} ({days_rest} days rest)")
+                    else:
+                        delta_color = "normal" if mult > 1.0 else "inverse"
+                        st.metric("Rest Days", f"{mult:.3f}x", 
+                                 delta=f"{((mult - 1.0) * 100):+.1f}%", 
+                                 delta_color=delta_color)
+                
+                # Home/Away
+                if 'home_away_multiplier' in player:
+                    st.markdown("##### 🏠 Home/Away")
+                    mult = player['home_away_multiplier']
+                    ha_info = player.get('home_away_info', {})
+                    if ha_info:
+                        is_home = ha_info.get('is_home', False)
+                        location = "Home" if is_home else "Away"
+                        delta_color = "normal" if mult > 1.0 else "inverse"
+                        st.metric("Home/Away", f"{mult:.3f}x", 
+                                 delta=f"{((mult - 1.0) * 100):+.1f}%", 
+                                 delta_color=delta_color)
+                        st.caption(f"{location} game adjustment")
+                    else:
+                        delta_color = "normal" if mult > 1.0 else "inverse"
+                        st.metric("Home/Away", f"{mult:.3f}x", 
+                                 delta=f"{((mult - 1.0) * 100):+.1f}%", 
+                                 delta_color=delta_color)
+                
+                # Play Style
+                if 'play_style_multiplier' in player:
+                    st.markdown("##### 🎨 Play Style Matchup")
+                    mult = player['play_style_multiplier']
+                    ps_info = player.get('play_style_info', {})
+                    if ps_info:
+                        team_style = ps_info.get('team_style', 'Unknown')
+                        advantage = ps_info.get('advantage', 1.0)
+                        delta_color = "normal" if mult > 1.0 else "inverse"
+                        st.metric("Play Style", f"{mult:.3f}x", 
+                                 delta=f"{((mult - 1.0) * 100):+.1f}%", 
+                                 delta_color=delta_color)
+                        st.caption(f"Team style: {team_style} | Advantage: {advantage:.3f}x")
+                    else:
+                        delta_color = "normal" if mult > 1.0 else "inverse"
+                        st.metric("Play Style", f"{mult:.3f}x", 
+                                 delta=f"{((mult - 1.0) * 100):+.1f}%", 
+                                 delta_color=delta_color)
+                
+                # Upside
+                if 'upside_points_multiplier' in player or 'upside_rebounds_multiplier' in player or 'upside_assists_multiplier' in player:
+                    st.markdown("##### ⬆️ Upside/Ceiling Potential")
+                    upside_info = player.get('upside_info', {})
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if 'upside_points_multiplier' in player:
+                            mult = player['upside_points_multiplier']
+                            delta_color = "normal" if mult > 1.0 else "inverse"
+                            st.metric("Upside (Points)", f"{mult:.3f}x", 
+                                     delta=f"{((mult - 1.0) * 100):+.1f}%", 
+                                     delta_color=delta_color)
+                            if upside_info and upside_info.get('points_career_high'):
+                                st.caption(f"Career high: {upside_info['points_career_high']:.1f}")
+                    with col2:
+                        if 'upside_rebounds_multiplier' in player:
+                            mult = player['upside_rebounds_multiplier']
+                            delta_color = "normal" if mult > 1.0 else "inverse"
+                            st.metric("Upside (Rebounds)", f"{mult:.3f}x", 
+                                     delta=f"{((mult - 1.0) * 100):+.1f}%", 
+                                     delta_color=delta_color)
+                    with col3:
+                        if 'upside_assists_multiplier' in player:
+                            mult = player['upside_assists_multiplier']
+                            delta_color = "normal" if mult > 1.0 else "inverse"
+                            st.metric("Upside (Assists)", f"{mult:.3f}x", 
+                                     delta=f"{((mult - 1.0) * 100):+.1f}%", 
+                                     delta_color=delta_color)
+                    
+                    if upside_info and upside_info.get('has_data'):
+                        st.caption(f"Based on career highs, volatility, and star status. Career high: {upside_info.get('points_career_high', 0):.1f} pts, 90th percentile: {upside_info.get('points_90th', 0):.1f} pts")
+                
+                # Combined effect
+                st.markdown("---")
+                st.markdown("#### 📊 Combined Effect")
+                
+                # Calculate combined multiplier for each stat
+                base_mult = (player.get('system_fit_multiplier', 1.0) * 
+                            player.get('recent_form_multiplier', 1.0) * 
+                            player.get('h2h_multiplier', 1.0) *
+                            player.get('rest_days_multiplier', 1.0) * 
+                            player.get('home_away_multiplier', 1.0) * 
+                            player.get('play_style_multiplier', 1.0))
+                
+                pts_combined = base_mult * player.get('upside_points_multiplier', 1.0)
+                reb_combined = base_mult * player.get('upside_rebounds_multiplier', 1.0)
+                ast_combined = base_mult * player.get('upside_assists_multiplier', 1.0)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Points Combined Mult", f"{pts_combined:.3f}x")
+                    st.caption(f"Base: {base_mult:.3f}x × Upside: {player.get('upside_points_multiplier', 1.0):.3f}x")
+                with col2:
+                    st.metric("Rebounds Combined Mult", f"{reb_combined:.3f}x")
+                    st.caption(f"Base: {base_mult:.3f}x × Upside: {player.get('upside_rebounds_multiplier', 1.0):.3f}x")
+                with col3:
+                    st.metric("Assists Combined Mult", f"{ast_combined:.3f}x")
+                    st.caption(f"Base: {base_mult:.3f}x × Upside: {player.get('upside_assists_multiplier', 1.0):.3f}x")
+            else:
+                st.info("No prediction data available for this player. Generate predictions first.")
+        else:
+            st.info("No prediction data available. Generate predictions to see factor breakdowns.")
     
     with tab2:
         # Advanced stats

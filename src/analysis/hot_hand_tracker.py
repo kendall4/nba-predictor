@@ -264,32 +264,86 @@ class HotHandTracker:
     # ---------------------------
     # Existing hot-hand logic
     # ---------------------------
-    def estimate_consistency_rate(self, player_name, threshold=5):
+    def estimate_consistency_rate(self, player_name, stat_type='points', threshold=5):
         """
         Estimate continuation based on player archetype from season averages.
+        
+        Args:
+            player_name: Player name
+            stat_type: 'points', 'rebounds', or 'assists'
+            threshold: Hot threshold for Q1 (default varies by stat type)
         """
         player = self.get_player_baseline(player_name)
         if player is None:
             return None
 
-        ppg = player['PTS']
         mpg = player['MIN']
-        usage = ppg / mpg if mpg > 0 else 0
-
-        if ppg >= 25 and mpg >= 32:
-            archetype = "SUPERSTAR"; q2_rate = 0.85; q3_rate = 0.80; q4_rate = 0.75; all_quarters = 0.65
-        elif ppg >= 18 and mpg >= 28:
-            archetype = "STAR"; q2_rate = 0.75; q3_rate = 0.65; q4_rate = 0.60; all_quarters = 0.45
-        elif ppg >= 12 and mpg >= 20:
-            archetype = "STARTER"; q2_rate = 0.65; q3_rate = 0.55; q4_rate = 0.50; all_quarters = 0.35
+        ppg = player['PTS']
+        rpg = player['REB']
+        apg = player['AST']
+        
+        # Default thresholds if not provided
+        if stat_type == 'points':
+            stat_value = ppg
+            if threshold == 5:  # Use default thresholds
+                threshold = 5 if ppg < 20 else 10
+        elif stat_type == 'rebounds':
+            stat_value = rpg
+            if threshold == 5:  # Use default thresholds
+                threshold = 3 if rpg < 8 else 5
+        elif stat_type == 'assists':
+            stat_value = apg
+            if threshold == 5:  # Use default thresholds
+                threshold = 2 if apg < 6 else 4
         else:
-            archetype = "ROLE PLAYER"; q2_rate = 0.50; q3_rate = 0.40; q4_rate = 0.35; all_quarters = 0.25
+            stat_value = ppg  # Fallback to points
+        
+        # Points archetypes
+        if stat_type == 'points':
+            if ppg >= 25 and mpg >= 32:
+                archetype = "SUPERSTAR"; q2_rate = 0.85; q3_rate = 0.80; q4_rate = 0.75; all_quarters = 0.65
+            elif ppg >= 18 and mpg >= 28:
+                archetype = "STAR"; q2_rate = 0.75; q3_rate = 0.65; q4_rate = 0.60; all_quarters = 0.45
+            elif ppg >= 12 and mpg >= 20:
+                archetype = "STARTER"; q2_rate = 0.65; q3_rate = 0.55; q4_rate = 0.50; all_quarters = 0.35
+            else:
+                archetype = "ROLE PLAYER"; q2_rate = 0.50; q3_rate = 0.40; q4_rate = 0.35; all_quarters = 0.25
+        
+        # Rebounds archetypes (based on RPG and position/role)
+        elif stat_type == 'rebounds':
+            if rpg >= 12 and mpg >= 30:
+                archetype = "ELITE REBOUNDER"; q2_rate = 0.80; q3_rate = 0.75; q4_rate = 0.70; all_quarters = 0.60
+            elif rpg >= 8 and mpg >= 25:
+                archetype = "STRONG REBOUNDER"; q2_rate = 0.70; q3_rate = 0.65; q4_rate = 0.60; all_quarters = 0.50
+            elif rpg >= 5 and mpg >= 20:
+                archetype = "SOLID REBOUNDER"; q2_rate = 0.60; q3_rate = 0.55; q4_rate = 0.50; all_quarters = 0.40
+            else:
+                archetype = "OCCASIONAL REBOUNDER"; q2_rate = 0.50; q3_rate = 0.45; q4_rate = 0.40; all_quarters = 0.30
+        
+        # Assists archetypes (based on APG and role)
+        elif stat_type == 'assists':
+            if apg >= 8 and mpg >= 30:
+                archetype = "ELITE PLAYMAKER"; q2_rate = 0.85; q3_rate = 0.80; q4_rate = 0.75; all_quarters = 0.65
+            elif apg >= 5 and mpg >= 25:
+                archetype = "STRONG PLAYMAKER"; q2_rate = 0.75; q3_rate = 0.70; q4_rate = 0.65; all_quarters = 0.55
+            elif apg >= 3 and mpg >= 20:
+                archetype = "SOLID PLAYMAKER"; q2_rate = 0.65; q3_rate = 0.60; q4_rate = 0.55; all_quarters = 0.45
+            else:
+                archetype = "OCCASIONAL PLAYMAKER"; q2_rate = 0.55; q3_rate = 0.50; q4_rate = 0.45; all_quarters = 0.35
+        
+        else:
+            # Fallback
+            archetype = "AVERAGE"; q2_rate = 0.60; q3_rate = 0.55; q4_rate = 0.50; all_quarters = 0.40
 
         return {
             'player_name': player_name,
+            'stat_type': stat_type,
             'archetype': archetype,
             'season_ppg': ppg,
+            'season_rpg': rpg,
+            'season_apg': apg,
             'season_mpg': mpg,
+            'season_stat': stat_value,
             'threshold': threshold,
             'q2_continuation': q2_rate,
             'q3_continuation': q3_rate,
@@ -297,28 +351,61 @@ class HotHandTracker:
             'all_quarters_rate': all_quarters,
         }
 
-    def predict_from_hot_q1(self, player_name, q1_points, threshold=5):
+    def predict_from_hot_q1(self, player_name, q1_stat_value, stat_type='points', threshold=None):
         """
-        Player just scored X points in Q1. Predict their final total based on player archetype.
+        Player just got X stat in Q1. Predict their final total based on player archetype.
+        
+        Args:
+            player_name: Player name
+            q1_stat_value: Stat value in Q1 (points, rebounds, or assists)
+            stat_type: 'points', 'rebounds', or 'assists'
+            threshold: Hot threshold (auto-determined if None)
         """
-        consistency = self.estimate_consistency_rate(player_name, threshold)
+        # Auto-determine threshold if not provided
+        if threshold is None:
+            player = self.get_player_baseline(player_name)
+            if player is None:
+                return {'error': f'Player "{player_name}" not found'}
+            
+            if stat_type == 'points':
+                threshold = 5 if player['PTS'] < 20 else 10
+            elif stat_type == 'rebounds':
+                threshold = 3 if player['REB'] < 8 else 5
+            elif stat_type == 'assists':
+                threshold = 2 if player['AST'] < 6 else 4
+            else:
+                threshold = 5
+        
+        consistency = self.estimate_consistency_rate(player_name, stat_type=stat_type, threshold=threshold)
         if consistency is None:
             return {
                 'error': f'Player "{player_name}" not found',
                 'note': 'Check spelling or update to 2025-26 season data'
             }
 
-        if q1_points >= threshold:
-            expected_q2 = q1_points * consistency['q2_continuation']
-            expected_q3 = q1_points * consistency['q3_continuation']
-            expected_q4 = q1_points * consistency['q4_continuation']
-            predicted_total = q1_points + expected_q2 + expected_q3 + expected_q4
-            season_avg = consistency['season_ppg']
+        if q1_stat_value >= threshold:
+            expected_q2 = q1_stat_value * consistency['q2_continuation']
+            expected_q3 = q1_stat_value * consistency['q3_continuation']
+            expected_q4 = q1_stat_value * consistency['q4_continuation']
+            predicted_total = q1_stat_value + expected_q2 + expected_q3 + expected_q4
+            
+            # Get season average for the stat type
+            if stat_type == 'points':
+                season_avg = consistency['season_ppg']
+            elif stat_type == 'rebounds':
+                season_avg = consistency['season_rpg']
+            elif stat_type == 'assists':
+                season_avg = consistency['season_apg']
+            else:
+                season_avg = consistency['season_stat']
+            
             above_avg = predicted_total - season_avg
+            
             return {
                 'player_name': player_name,
+                'stat_type': stat_type,
                 'archetype': consistency['archetype'],
-                'q1_actual': q1_points,
+                'q1_actual': q1_stat_value,
                 'predicted_q2': expected_q2,
                 'predicted_q3': expected_q3,
                 'predicted_q4': expected_q4,
@@ -326,14 +413,27 @@ class HotHandTracker:
                 'season_average': season_avg,
                 'vs_average': above_avg,
                 'consistency_score': consistency['all_quarters_rate'],
-                'confidence': 'HIGH' if consistency['all_quarters_rate'] > 0.5 else 'MEDIUM' if consistency['all_quarters_rate'] > 0.35 else 'LOW'
+                'confidence': 'HIGH' if consistency['all_quarters_rate'] > 0.5 else 'MEDIUM' if consistency['all_quarters_rate'] > 0.35 else 'LOW',
+                'threshold': threshold
             }
         else:
+            # Get season average for the stat type
+            if stat_type == 'points':
+                season_avg = consistency['season_ppg']
+            elif stat_type == 'rebounds':
+                season_avg = consistency['season_rpg']
+            elif stat_type == 'assists':
+                season_avg = consistency['season_apg']
+            else:
+                season_avg = consistency['season_stat']
+            
             return {
                 'player_name': player_name,
-                'q1_actual': q1_points,
-                'season_average': consistency['season_ppg'],
-                'note': f'Below {threshold} point threshold - not a hot start'
+                'stat_type': stat_type,
+                'q1_actual': q1_stat_value,
+                'season_average': season_avg,
+                'threshold': threshold,
+                'note': f'Below {threshold} {stat_type} threshold - not a hot start'
             }
 
 

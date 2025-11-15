@@ -366,4 +366,181 @@ class SystemProfileAnalyzer:
             'style': 'Balanced',
             'def_rating_vs_avg': 0.0
         }
+    
+    def get_play_style_profile(self, team_abbr: str) -> Dict:
+        """
+        Get team's offensive play style profile
+        Tracks: Pick-and-roll frequency, isolation, fast break, post-up, 3-point rate
+        
+        Args:
+            team_abbr: Team abbreviation
+        
+        Returns:
+            Dict with play style metrics and frequencies
+        """
+        cache_key = f"play_style_{team_abbr}"
+        if cache_key in self._team_profiles_cache:
+            return self._team_profiles_cache[cache_key]
+        
+        self._load_team_data()
+        
+        if self.team_stats is None:
+            return self._default_play_style_profile()
+        
+        team_data = self.team_stats[self.team_stats['TEAM_ABBREVIATION'] == team_abbr]
+        if len(team_data) == 0:
+            return self._default_play_style_profile()
+        
+        team_data = team_data.iloc[0]
+        
+        pace = team_data.get('PACE', 100)
+        off_rating = team_data.get('OFF_RATING', 110)
+        fg3a = team_data.get('FG3A', 0)
+        fga = team_data.get('FGA', 0)
+        
+        three_point_rate = (fg3a / fga * 100) if fga > 0 else 30.0
+        
+        play_styles = {
+            'pick_and_roll_freq': 0.25,
+            'isolation_freq': 0.10,
+            'fast_break_freq': 0.15 if pace > 102 else 0.10,
+            'post_up_freq': 0.08,
+            'three_point_rate': three_point_rate,
+            'transition_freq': 0.12 if pace > 102 else 0.08
+        }
+        
+        if pace > 105:
+            play_styles['fast_break_freq'] = 0.20
+            play_styles['transition_freq'] = 0.15
+        elif pace < 95:
+            play_styles['fast_break_freq'] = 0.08
+            play_styles['transition_freq'] = 0.06
+            play_styles['post_up_freq'] = 0.12
+        
+        if three_point_rate > 40:
+            play_styles['pick_and_roll_freq'] = 0.30
+        elif three_point_rate < 25:
+            play_styles['post_up_freq'] = 0.15
+            play_styles['isolation_freq'] = 0.15
+        
+        profile = {
+            'team': team_abbr,
+            'pace': pace,
+            'off_rating': off_rating,
+            'play_styles': play_styles,
+            'primary_style': self._determine_primary_style(play_styles, pace)
+        }
+        
+        self._team_profiles_cache[cache_key] = profile
+        return profile
+    
+    def _default_play_style_profile(self) -> Dict:
+        """Return default play style profile"""
+        return {
+            'team': 'UNK',
+            'pace': 100,
+            'off_rating': 110,
+            'play_styles': {
+                'pick_and_roll_freq': 0.25,
+                'isolation_freq': 0.10,
+                'fast_break_freq': 0.12,
+                'post_up_freq': 0.08,
+                'three_point_rate': 30.0,
+                'transition_freq': 0.10
+            },
+            'primary_style': 'Balanced'
+        }
+    
+    def _determine_primary_style(self, play_styles: Dict, pace: float) -> str:
+        """Determine primary offensive style"""
+        if play_styles['fast_break_freq'] > 0.18:
+            return 'Run-and-Gun'
+        elif play_styles['three_point_rate'] > 40:
+            return '3-Point Heavy'
+        elif play_styles['pick_and_roll_freq'] > 0.30:
+            return 'Pick-and-Roll'
+        elif play_styles['post_up_freq'] > 0.12:
+            return 'Post-Up'
+        elif play_styles['isolation_freq'] > 0.15:
+            return 'Isolation'
+        else:
+            return 'Balanced'
+    
+    def get_defensive_play_style_profile(self, team_abbr: str) -> Dict:
+        """Get team's defensive play style profile - what they struggle against"""
+        cache_key = f"def_play_style_{team_abbr}"
+        if cache_key in self._team_profiles_cache:
+            return self._team_profiles_cache[cache_key]
+        
+        self._load_team_data()
+        
+        if self.team_stats is None:
+            return self._default_defensive_play_style_profile()
+        
+        team_data = self.team_stats[self.team_stats['TEAM_ABBREVIATION'] == team_abbr]
+        if len(team_data) == 0:
+            return self._default_defensive_play_style_profile()
+        
+        team_data = team_data.iloc[0]
+        def_rating = team_data.get('DEF_RATING', 112)
+        avg_def_rating = self.league_averages.get('DEF_RATING', 112)
+        weakness_factor = (def_rating - avg_def_rating) / 10.0
+        
+        defensive_profile = {
+            'team': team_abbr,
+            'def_rating': def_rating,
+            'weaknesses': {
+                'vs_pick_and_roll': max(0.0, min(1.0, 0.5 + weakness_factor * 0.2)),
+                'vs_isolation': max(0.0, min(1.0, 0.5 + weakness_factor * 0.15)),
+                'vs_post_up': max(0.0, min(1.0, 0.5 + weakness_factor * 0.1)),
+                'vs_fast_break': max(0.0, min(1.0, 0.5 + weakness_factor * 0.25)),
+                'vs_three_point': max(0.0, min(1.0, 0.5 + weakness_factor * 0.2))
+            }
+        }
+        
+        self._team_profiles_cache[cache_key] = defensive_profile
+        return defensive_profile
+    
+    def _default_defensive_play_style_profile(self) -> Dict:
+        """Return default defensive play style profile"""
+        return {
+            'team': 'UNK',
+            'def_rating': 112,
+            'weaknesses': {
+                'vs_pick_and_roll': 0.5,
+                'vs_isolation': 0.5,
+                'vs_post_up': 0.5,
+                'vs_fast_break': 0.5,
+                'vs_three_point': 0.5
+            }
+        }
+    
+    def calculate_play_style_matchup_advantage(self, team_off_profile: Dict, 
+                                                opponent_def_profile: Dict) -> float:
+        """Calculate matchup advantage based on play style alignment"""
+        team_styles = team_off_profile.get('play_styles', {})
+        opp_weaknesses = opponent_def_profile.get('weaknesses', {})
+        
+        matchup_score = 1.0
+        
+        pnr_freq = team_styles.get('pick_and_roll_freq', 0.25)
+        pnr_weakness = opp_weaknesses.get('vs_pick_and_roll', 0.5)
+        if pnr_freq > 0.25:
+            pnr_advantage = (pnr_weakness - 0.5) * 2.0
+            matchup_score += pnr_advantage * pnr_freq * 0.15
+        
+        fb_freq = team_styles.get('fast_break_freq', 0.12)
+        fb_weakness = opp_weaknesses.get('vs_fast_break', 0.5)
+        if fb_freq > 0.15:
+            fb_advantage = (fb_weakness - 0.5) * 2.0
+            matchup_score += fb_advantage * fb_freq * 0.12
+        
+        three_rate = team_styles.get('three_point_rate', 30.0) / 100.0
+        three_weakness = opp_weaknesses.get('vs_three_point', 0.5)
+        if three_rate > 0.35:
+            three_advantage = (three_weakness - 0.5) * 2.0
+            matchup_score += three_advantage * three_rate * 0.10
+        
+        matchup_score = max(0.90, min(1.15, matchup_score))
+        return matchup_score
 

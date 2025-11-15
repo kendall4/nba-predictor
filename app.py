@@ -153,6 +153,30 @@ with st.sidebar:
         help="How much historical performance vs this opponent affects predictions. Higher = more weight on H2H trends."
     )
     st.caption("💡 Player's historical stats vs this specific opponent")
+    
+    st.markdown("---")
+    st.markdown("#### 🆕 Advanced Factors")
+    
+    rest_days_weight = st.slider(
+        "Rest Days Weight", 0.0, 1.0, 0.0, 0.1,
+        help="Weight for rest days adjustment (B2B penalties for high-usage, boosts for bench)"
+    )
+    
+    home_away_weight = st.slider(
+        "Home/Away Weight", 0.0, 1.0, 0.0, 0.1,
+        help="Weight for home/away performance adjustments based on team records"
+    )
+    
+    play_style_weight = st.slider(
+        "Play Style Weight", 0.0, 1.0, 0.0, 0.1,
+        help="Weight for play style matchup advantages (P&R, isolation, fast break, etc.)"
+    )
+    
+    upside_weight = st.slider(
+        "Upside/Ceiling Weight", 0.0, 1.0, 0.0, 0.1,
+        help="Weight for player upside potential (career highs, volatility, star status). Higher = more consideration of ceiling vs floor."
+    )
+    st.caption("💡 Accounts for players who rarely hit thresholds but have the ability/talent to do so")
 
 # Get today's games
 @st.cache_data(ttl=300)  # Cache for 5 minutes
@@ -273,10 +297,11 @@ with tab_nba:
     # Preload all data on app start for faster tab switching
     # Note: Cache key includes version to force reload when signature changes
     @st.cache_resource(show_spinner=False)
-    def preload_matchup_builder(_version=2):
+    def preload_matchup_builder(_version=4):
         """Preload MatchupFeatureBuilder once (shared across sessions)
         
         _version parameter forces cache invalidation when incremented
+        Incremented to 4: Added upside_weight parameter for ceiling/upside potential
         """
         from src.features.matchup_features import MatchupFeatureBuilder
         builder = MatchupFeatureBuilder(blend_mode="latest")
@@ -377,6 +402,14 @@ with tab_nba:
             enabled_factors.append(f"Recent Form ({recent_form_weight:.1f})")
         if h2h_weight > 0:
             enabled_factors.append(f"H2H ({h2h_weight:.1f})")
+        if rest_days_weight > 0:
+            enabled_factors.append(f"Rest Days ({rest_days_weight:.1f})")
+        if home_away_weight > 0:
+            enabled_factors.append(f"Home/Away ({home_away_weight:.1f})")
+        if play_style_weight > 0:
+            enabled_factors.append(f"Play Style ({play_style_weight:.1f})")
+        if upside_weight > 0:
+            enabled_factors.append(f"Upside ({upside_weight:.1f})")
         
         if enabled_factors:
             status_placeholder.info(f"🔄 Generating predictions with: {', '.join(enabled_factors)}... This may take a moment.")
@@ -403,7 +436,11 @@ with tab_nba:
                     games, 
                     system_fit_weight=system_fit_weight,
                     recent_form_weight=recent_form_weight,
-                    h2h_weight=h2h_weight
+                    h2h_weight=h2h_weight,
+                    rest_days_weight=rest_days_weight,
+                    home_away_weight=home_away_weight,
+                    play_style_weight=play_style_weight,
+                    upside_weight=upside_weight
                 )
             st.session_state['predictions_raw'] = predictions_raw
             

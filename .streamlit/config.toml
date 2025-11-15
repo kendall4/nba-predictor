@@ -1,7 +1,7 @@
 [server]
 port = 8501
 headless = true
-enableCORS = false
+enableCORS = true
 enableXsrfProtection = true
 fileWatcherType = "auto"
 runOnSave = true

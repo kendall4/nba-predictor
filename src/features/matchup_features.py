@@ -116,7 +116,10 @@ class MatchupFeatureBuilder:
             print(f"  📊 Using heuristic predictions (train ML models for better accuracy)")
     
     def get_player_features(self, player_name, opponent_team, system_fit_weight: float = 0.0, 
-                           recent_form_weight: float = 0.0, h2h_weight: float = 0.0):
+                           recent_form_weight: float = 0.0, h2h_weight: float = 0.0,
+                           rest_days_weight: float = 0.0, home_away_weight: float = 0.0,
+                           play_style_weight: float = 0.0, upside_weight: float = 0.0,
+                           game_date=None, is_home=False):
         """
         Build features for: Player X vs Opponent Y
         
@@ -196,6 +199,120 @@ class MatchupFeatureBuilder:
         system_fit_multiplier = 1.0
         offensive_fit = 1.0
         defensive_matchup = 1.0
+        
+        # Rest days adjustment (if enabled)
+        rest_days_multiplier = 1.0
+        rest_days_info = None
+        
+        # Home/away adjustment (if enabled)
+        home_away_multiplier = 1.0
+        home_away_info = None
+        
+        # Play style matchup adjustment (if enabled)
+        play_style_multiplier = 1.0
+        play_style_info = None
+        
+        # Usage and ball dominance adjustment for assists (always enabled)
+        usage_ball_dominance_multiplier = 1.0
+        usage_ball_info = None
+        
+        # Calculate usage rate and ball dominance for assists
+        # Usage: FGA + FTA per minute (proxy for how much player uses possessions)
+        # Ball dominance: Assists per minute + minutes (proxy for how much player handles ball)
+        try:
+            # Get game log for usage calculation
+            game_log = None
+            if hasattr(self, '_gamelog_cache') and player_name in self._gamelog_cache:
+                game_log = self._gamelog_cache[player_name]
+            elif hasattr(self, '_hot_tracker'):
+                game_log = self._hot_tracker.get_player_gamelog(player_name, season='2025-26')
+                if game_log is None or len(game_log) == 0:
+                    game_log = self._hot_tracker.get_player_gamelog(player_name, season='2024-25')
+            
+            if game_log is not None and len(game_log) > 0:
+                recent = game_log.head(10)
+                
+                # Calculate usage rate (FGA + FTA per minute)
+                if 'FGA' in recent.columns and 'FTA' in recent.columns and 'MIN' in recent.columns:
+                    total_fga = recent['FGA'].sum()
+                    total_fta = recent['FTA'].sum()
+                    total_min = recent['MIN'].sum()
+                    
+                    if total_min > 0:
+                        usage_rate = (total_fga + total_fta) / total_min  # Per minute
+                        # Normalize: league average is ~1.5-2.0 per minute
+                        # High usage = >2.0, Medium = 1.5-2.0, Low = <1.5
+                        if usage_rate > 2.0:
+                            usage_multiplier = 1.10  # +10% for high usage
+                        elif usage_rate > 1.5:
+                            usage_multiplier = 1.05  # +5% for medium-high usage
+                        else:
+                            usage_multiplier = 1.0   # Neutral for low usage
+                    else:
+                        usage_multiplier = 1.0
+                else:
+                    usage_multiplier = 1.0
+                
+                # Calculate ball dominance (assists per minute + minutes factor)
+                if 'AST' in recent.columns and 'MIN' in recent.columns:
+                    avg_ast = recent['AST'].mean()
+                    avg_min = recent['MIN'].mean()
+                    
+                    if avg_min > 0:
+                        ast_per_min = avg_ast / avg_min
+                        # High assist rate (>0.15 per min) = primary ball handler
+                        # Medium (0.08-0.15) = secondary ball handler
+                        # Low (<0.08) = off-ball player
+                        if ast_per_min > 0.15:
+                            ball_dominance_multiplier = 1.12  # +12% for primary ball handler
+                        elif ast_per_min > 0.08:
+                            ball_dominance_multiplier = 1.06  # +6% for secondary ball handler
+                        else:
+                            ball_dominance_multiplier = 1.0   # Neutral for off-ball
+                        
+                        # Additional boost for high minutes (more time with ball)
+                        if avg_min >= 35:
+                            ball_dominance_multiplier *= 1.05  # +5% for high minutes
+                        elif avg_min >= 30:
+                            ball_dominance_multiplier *= 1.02  # +2% for medium-high minutes
+                    else:
+                        ball_dominance_multiplier = 1.0
+                else:
+                    ball_dominance_multiplier = 1.0
+                
+                # Combined multiplier
+                usage_ball_dominance_multiplier = usage_multiplier * ball_dominance_multiplier
+                
+                usage_ball_info = {
+                    'usage_multiplier': usage_multiplier,
+                    'ball_dominance_multiplier': ball_dominance_multiplier,
+                    'combined_multiplier': usage_ball_dominance_multiplier,
+                    'usage_rate': usage_rate if 'usage_rate' in locals() else None,
+                    'ast_per_min': ast_per_min if 'ast_per_min' in locals() else None
+                }
+            else:
+                # Fallback: estimate from season averages
+                season_ast = player.get('AST', 0)
+                season_min = player.get('MIN', 0)
+                if season_min > 0:
+                    ast_per_min = season_ast / season_min
+                    if ast_per_min > 0.15:
+                        usage_ball_dominance_multiplier = 1.10
+                    elif ast_per_min > 0.08:
+                        usage_ball_dominance_multiplier = 1.05
+                    else:
+                        usage_ball_dominance_multiplier = 1.0
+                else:
+                    usage_ball_dominance_multiplier = 1.0
+        except Exception:
+            # If calculation fails, use neutral multiplier
+            usage_ball_dominance_multiplier = 1.0
+        
+        # Upside/ceiling adjustment (if enabled)
+        upside_points_multiplier = 1.0
+        upside_rebounds_multiplier = 1.0
+        upside_assists_multiplier = 1.0
+        upside_info = None
         
         # Recent form adjustment (if enabled) - Skip if weight is 0 to save time
         recent_form_multiplier = 1.0
@@ -340,6 +457,164 @@ class MatchupFeatureBuilder:
                 # If H2H check fails, continue without it
                 pass
         
+        # Rest days adjustment (if enabled)
+        if rest_days_weight > 0 and game_date is not None:
+            try:
+                from src.services.rest_days_calculator import RestDaysCalculator
+                if not hasattr(self, '_rest_calculator'):
+                    self._rest_calculator = RestDaysCalculator()
+                
+                player_minutes = player['MIN']
+                rest_info = self._rest_calculator.get_rest_adjustment(
+                    player['TEAM_ABBREVIATION'], 
+                    game_date,
+                    player_minutes=player_minutes
+                )
+                
+                rest_mult = rest_info['multiplier']
+                # Apply weight: 1.0 + (mult - 1.0) * weight
+                rest_days_multiplier = 1.0 + (rest_mult - 1.0) * rest_days_weight
+                rest_days_info = rest_info
+            except Exception:
+                pass
+        
+        # Home/away adjustment (if enabled)
+        if home_away_weight > 0:
+            try:
+                from src.services.home_away_analyzer import HomeAwayAnalyzer
+                if not hasattr(self, '_home_away_analyzer'):
+                    self._home_away_analyzer = HomeAwayAnalyzer()
+                
+                # Get team record if available (from pace data)
+                team_record = None
+                if 'W' in player_team.index and 'L' in player_team.index:
+                    wins = float(player_team.get('W', 0))
+                    losses = float(player_team.get('L', 0))
+                    total = wins + losses
+                    if total > 0:
+                        team_record = {
+                            'wins': wins,
+                            'losses': losses,
+                            'win_pct': wins / total
+                        }
+                
+                # Get team multiplier
+                team_mult = self._home_away_analyzer.get_home_away_multiplier(
+                    player['TEAM_ABBREVIATION'],
+                    is_home=is_home,
+                    team_record=team_record
+                )
+                
+                # Try to get player-specific split from cached game log
+                player_split = None
+                if hasattr(self, '_gamelog_cache') and player_name in self._gamelog_cache:
+                    game_log = self._gamelog_cache[player_name]
+                    player_split = self._home_away_analyzer.get_player_home_away_split(
+                        player_name,
+                        cached_game_log=game_log
+                    )
+                
+                # Use player split if available, otherwise use team multiplier
+                if player_split and player_split.get('has_data', False):
+                    if is_home:
+                        player_mult = player_split['home_multiplier']
+                    else:
+                        player_mult = player_split['away_multiplier']
+                    # Blend player and team (70% player, 30% team)
+                    final_mult = player_mult * 0.7 + team_mult * 0.3
+                else:
+                    final_mult = team_mult
+                
+                # Apply weight
+                home_away_multiplier = 1.0 + (final_mult - 1.0) * home_away_weight
+                home_away_info = {
+                    'is_home': is_home,
+                    'team_multiplier': team_mult,
+                    'player_multiplier': player_split.get('home_multiplier' if is_home else 'away_multiplier', None) if player_split else None
+                }
+            except Exception:
+                pass
+        
+        # Play style matchup adjustment (if enabled)
+        if play_style_weight > 0:
+            try:
+                from src.services.system_profile_analyzer import SystemProfileAnalyzer
+                if not hasattr(self, '_profile_analyzer'):
+                    self._profile_analyzer = SystemProfileAnalyzer()
+                profile_analyzer = self._profile_analyzer
+                
+                # Get offensive play style profile (player's team)
+                team_off_style = profile_analyzer.get_play_style_profile(player['TEAM_ABBREVIATION'])
+                
+                # Get defensive play style profile (opponent)
+                opp_def_style = profile_analyzer.get_defensive_play_style_profile(opponent_team)
+                
+                # Calculate matchup advantage
+                style_advantage = profile_analyzer.calculate_play_style_matchup_advantage(
+                    team_off_style, opp_def_style
+                )
+                
+                # Apply weight
+                play_style_multiplier = 1.0 + (style_advantage - 1.0) * play_style_weight
+                play_style_info = {
+                    'team_style': team_off_style.get('primary_style', 'Balanced'),
+                    'opponent_weakness': opp_def_style.get('weaknesses', {}),
+                    'advantage': style_advantage
+                }
+            except Exception:
+                pass
+        
+        # Upside/ceiling adjustment (if enabled)
+        if upside_weight > 0:
+            try:
+                from src.services.upside_calculator import UpsideCalculator
+                if not hasattr(self, '_upside_calculator'):
+                    self._upside_calculator = UpsideCalculator()
+                
+                # Get cached game log if available
+                game_log = None
+                if hasattr(self, '_gamelog_cache') and player_name in self._gamelog_cache:
+                    game_log = self._gamelog_cache[player_name]
+                
+                # Calculate upside multipliers for each stat
+                upside_points_multiplier = self._upside_calculator.get_upside_multiplier(
+                    player_name, 'points', game_log, 
+                    season_avg=player['PTS'], 
+                    minutes=player['MIN'],
+                    weight=upside_weight
+                )
+                
+                upside_rebounds_multiplier = self._upside_calculator.get_upside_multiplier(
+                    player_name, 'rebounds', game_log,
+                    season_avg=player['REB'],
+                    minutes=player['MIN'],
+                    weight=upside_weight
+                )
+                
+                upside_assists_multiplier = self._upside_calculator.get_upside_multiplier(
+                    player_name, 'assists', game_log,
+                    season_avg=player['AST'],
+                    minutes=player['MIN'],
+                    weight=upside_weight
+                )
+                
+                # Get detailed metrics for info
+                points_metrics = self._upside_calculator.calculate_upside_metrics(
+                    player_name, 'points', game_log, player['PTS'], player['MIN']
+                )
+                
+                upside_info = {
+                    'points_multiplier': upside_points_multiplier,
+                    'rebounds_multiplier': upside_rebounds_multiplier,
+                    'assists_multiplier': upside_assists_multiplier,
+                    'points_career_high': points_metrics.get('career_high', 0),
+                    'points_90th': points_metrics.get('career_90th', 0),
+                    'points_volatility': points_metrics.get('volatility', 0),
+                    'has_data': points_metrics.get('has_data', False)
+                }
+            except Exception:
+                pass
+        
         if system_fit_weight > 0:
             try:
                 from src.services.system_profile_analyzer import SystemProfileAnalyzer
@@ -409,6 +684,18 @@ class MatchupFeatureBuilder:
             # Recent form and H2H (if enabled)
             'recent_form_multiplier': recent_form_multiplier,
             'h2h_multiplier': h2h_multiplier,
+            'rest_days_multiplier': rest_days_multiplier,
+            'rest_days_info': rest_days_info,
+            'home_away_multiplier': home_away_multiplier,
+            'home_away_info': home_away_info,
+            'play_style_multiplier': play_style_multiplier,
+            'play_style_info': play_style_info,
+            'upside_points_multiplier': upside_points_multiplier,
+            'upside_rebounds_multiplier': upside_rebounds_multiplier,
+            'upside_assists_multiplier': upside_assists_multiplier,
+            'upside_info': upside_info,
+            'usage_ball_dominance_multiplier': usage_ball_dominance_multiplier,
+            'usage_ball_info': usage_ball_info,
         }
         
         # PREDICTION: Use ML if available, else heuristics
@@ -433,11 +720,13 @@ class MatchupFeatureBuilder:
             base_rebounds = float(self.ml_models['REB'].predict(feature_array)[0])
             base_assists = float(self.ml_models['AST'].predict(feature_array)[0])
             
-            # Apply all multipliers if enabled
-            combined_multiplier = system_fit_multiplier * recent_form_multiplier * h2h_multiplier
-            features['predicted_points'] = base_points * combined_multiplier
-            features['predicted_rebounds'] = base_rebounds * combined_multiplier
-            features['predicted_assists'] = base_assists * combined_multiplier
+            # Apply all multipliers if enabled (upside is stat-specific)
+            # For assists, also apply usage/ball dominance multiplier
+            base_multiplier = (system_fit_multiplier * recent_form_multiplier * h2h_multiplier *
+                             rest_days_multiplier * home_away_multiplier * play_style_multiplier)
+            features['predicted_points'] = base_points * base_multiplier * upside_points_multiplier
+            features['predicted_rebounds'] = base_rebounds * base_multiplier * upside_rebounds_multiplier
+            features['predicted_assists'] = base_assists * base_multiplier * upside_assists_multiplier * usage_ball_dominance_multiplier
         else:
             # Fallback to heuristics (simple multipliers)
             # Apply all multipliers if enabled
@@ -445,15 +734,19 @@ class MatchupFeatureBuilder:
             base_rebounds = player['REB'] * pace_factor
             base_assists = player['AST'] * pace_factor
             
-            combined_multiplier = system_fit_multiplier * recent_form_multiplier * h2h_multiplier
-            features['predicted_points'] = base_points * combined_multiplier
-            features['predicted_rebounds'] = base_rebounds * combined_multiplier
-            features['predicted_assists'] = base_assists * combined_multiplier
+            base_multiplier = (system_fit_multiplier * recent_form_multiplier * h2h_multiplier *
+                             rest_days_multiplier * home_away_multiplier * play_style_multiplier)
+            features['predicted_points'] = base_points * base_multiplier * upside_points_multiplier
+            features['predicted_rebounds'] = base_rebounds * base_multiplier * upside_rebounds_multiplier
+            # For assists, also apply usage/ball dominance multiplier
+            features['predicted_assists'] = base_assists * base_multiplier * upside_assists_multiplier * usage_ball_dominance_multiplier
         
         return features
     
     def get_all_matchups(self, games_today, system_fit_weight: float = 0.0, 
-                        recent_form_weight: float = 0.0, h2h_weight: float = 0.0):
+                        recent_form_weight: float = 0.0, h2h_weight: float = 0.0,
+                        rest_days_weight: float = 0.0, home_away_weight: float = 0.0,
+                        play_style_weight: float = 0.0, upside_weight: float = 0.0):
         """
         Get features for all players in today's games
         
@@ -482,9 +775,9 @@ class MatchupFeatureBuilder:
                     self._profile_analyzer.get_offensive_profile(team)
                     self._profile_analyzer.get_defensive_profile(team)
         
-        # Pre-fetch and cache game logs for all players if recent form or H2H is enabled
+        # Pre-fetch and cache game logs for all players if recent form, H2H, or upside is enabled
         # Note: We'll fetch on-demand during processing to avoid blocking
-        if recent_form_weight > 0 or h2h_weight > 0:
+        if recent_form_weight > 0 or h2h_weight > 0 or upside_weight > 0:
             if not hasattr(self, '_hot_tracker'):
                 from src.analysis.hot_hand_tracker import HotHandTracker
                 self._hot_tracker = HotHandTracker(blend_mode="latest")
@@ -514,12 +807,32 @@ class MatchupFeatureBuilder:
             else:
                 away_players = away_players.drop_duplicates(subset=['PLAYER_NAME'])
             
+            # Get game date if available
+            from datetime import datetime, date
+            game_date = None
+            if 'game_date' in game:
+                if isinstance(game['game_date'], date):
+                    game_date = game['game_date']
+                elif isinstance(game['game_date'], str):
+                    try:
+                        game_date = datetime.strptime(game['game_date'], '%Y-%m-%d').date()
+                    except:
+                        game_date = date.today()
+            else:
+                game_date = date.today()  # Default to today
+            
             for _, player in home_players.iterrows():
                 features = self.get_player_features(
                     player['PLAYER_NAME'], away, 
                     system_fit_weight=system_fit_weight,
                     recent_form_weight=recent_form_weight,
-                    h2h_weight=h2h_weight
+                    h2h_weight=h2h_weight,
+                    rest_days_weight=rest_days_weight,
+                    home_away_weight=home_away_weight,
+                    play_style_weight=play_style_weight,
+                    upside_weight=upside_weight,
+                    game_date=game_date,
+                    is_home=True
                 )
                 if features:
                     all_features.append(features)
@@ -529,7 +842,13 @@ class MatchupFeatureBuilder:
                     player['PLAYER_NAME'], home,
                     system_fit_weight=system_fit_weight,
                     recent_form_weight=recent_form_weight,
-                    h2h_weight=h2h_weight
+                    h2h_weight=h2h_weight,
+                    rest_days_weight=rest_days_weight,
+                    home_away_weight=home_away_weight,
+                    play_style_weight=play_style_weight,
+                    upside_weight=upside_weight,
+                    game_date=game_date,
+                    is_home=False
                 )
                 if features:
                     all_features.append(features)
