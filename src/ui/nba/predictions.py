@@ -26,6 +26,64 @@ def calculate_hit_rate(game_log, stat_col, line_value, n_games):
     hit_rate = (exceeded / total) * 100
     return round(hit_rate, 1)
 
+def calculate_h2h_hit_rate(tracker, player_name, opponent, stat_type, line_value):
+    """Calculate H2H hit rate using HotHandTracker's consistency_h2h method"""
+    try:
+        # Map stat names to stat_type format
+        stat_map = {
+            'PTS': 'points',
+            'REB': 'rebounds',
+            'AST': 'assists'
+        }
+        stat_type_key = stat_map.get(stat_type, 'points')
+        
+        result = tracker.consistency_h2h(player_name, stat_type_key, line_value, opponent, season='2025-26')
+        if result and result.get('hit_rate') is not None:
+            return round(result['hit_rate'] * 100, 1)  # Convert to percentage
+    except Exception:
+        pass
+    return None
+
+def calculate_matchup_hit_rate(tracker, player_name, opponent, stat_col, line_value):
+    """Calculate hit rate for all games against this specific opponent (individual matchup)"""
+    try:
+        # Get game logs for both seasons
+        h2h_games = []
+        for season in ['2025-26', '2024-25']:
+            game_log = tracker.get_player_gamelog(player_name, season=season)
+            if game_log is not None and len(game_log) > 0:
+                game_log = game_log.copy()
+                game_log['OPP'] = game_log['MATCHUP'].apply(tracker._parse_opponent_from_matchup)
+                h2h = game_log[game_log['OPP'] == opponent]
+                if len(h2h) > 0:
+                    h2h_games.append(h2h)
+        
+        if not h2h_games:
+            return None
+        
+        # Combine all H2H games
+        h2h_combined = pd.concat(h2h_games, ignore_index=True) if len(h2h_games) > 1 else h2h_games[0]
+        
+        if stat_col not in h2h_combined.columns:
+            return None
+        
+        # Calculate hit rate for all games vs this opponent
+        valid = h2h_combined[pd.notna(h2h_combined[stat_col])]
+        if len(valid) == 0:
+            return None
+        
+        exceeded = (valid[stat_col] > line_value).sum()
+        total = len(valid)
+        
+        if total == 0:
+            return None
+        
+        hit_rate = (exceeded / total) * 100
+        return round(hit_rate, 1)
+    except Exception:
+        pass
+    return None
+
 def calculate_implied_probability(prediction, line, stat_type='points'):
     """Calculate implied probability from prediction vs line using normal distribution"""
     from src.utils.odds_utils import calculate_implied_prob_from_line
@@ -87,8 +145,12 @@ def render(predictions):
         if 'pred_points' in player and 'line_points' in player and 'point_value' in player:
             line_pts = player['line_points']
             pred_pts = player['pred_points']
+            hit_3 = calculate_hit_rate(game_log, 'PTS', line_pts, 3)
             hit_5 = calculate_hit_rate(game_log, 'PTS', line_pts, 5)
+            hit_8 = calculate_hit_rate(game_log, 'PTS', line_pts, 8)
             hit_10 = calculate_hit_rate(game_log, 'PTS', line_pts, 10)
+            h2h_hit = calculate_h2h_hit_rate(tracker, player_name, opponent, 'PTS', line_pts) if opponent else None
+            matchup_hit = calculate_matchup_hit_rate(tracker, player_name, opponent, 'PTS', line_pts) if opponent else None
             ip = calculate_implied_probability(pred_pts, line_pts, 'points')
             opp_rank = get_opponent_rank(opponent, 'points')
             
@@ -101,8 +163,12 @@ def render(predictions):
                 'prediction': round(pred_pts, 1),
                 'line': line_pts,
                 'value': round(player['point_value'], 2),
+                'hit_3': hit_3 if hit_3 is not None else None,
                 'hit_5': hit_5 if hit_5 is not None else None,
+                'hit_8': hit_8 if hit_8 is not None else None,
                 'hit_10': hit_10 if hit_10 is not None else None,
+                'h2h': h2h_hit if h2h_hit is not None else None,
+                'matchup': matchup_hit if matchup_hit is not None else None,
                 'ip': round(ip, 0) if ip else None,
                 'opp_rank': opp_rank,
                 'player_data': player
@@ -112,8 +178,12 @@ def render(predictions):
         if 'pred_rebounds' in player and 'line_rebounds' in player and 'rebound_value' in player:
             line_reb = player['line_rebounds']
             pred_reb = player['pred_rebounds']
+            hit_3 = calculate_hit_rate(game_log, 'REB', line_reb, 3)
             hit_5 = calculate_hit_rate(game_log, 'REB', line_reb, 5)
+            hit_8 = calculate_hit_rate(game_log, 'REB', line_reb, 8)
             hit_10 = calculate_hit_rate(game_log, 'REB', line_reb, 10)
+            h2h_hit = calculate_h2h_hit_rate(tracker, player_name, opponent, 'REB', line_reb) if opponent else None
+            matchup_hit = calculate_matchup_hit_rate(tracker, player_name, opponent, 'REB', line_reb) if opponent else None
             ip = calculate_implied_probability(pred_reb, line_reb, 'rebounds')
             opp_rank = get_opponent_rank(opponent, 'rebounds')
             
@@ -126,8 +196,12 @@ def render(predictions):
                 'prediction': round(pred_reb, 1),
                 'line': line_reb,
                 'value': round(player['rebound_value'], 2),
+                'hit_3': hit_3 if hit_3 is not None else None,
                 'hit_5': hit_5 if hit_5 is not None else None,
+                'hit_8': hit_8 if hit_8 is not None else None,
                 'hit_10': hit_10 if hit_10 is not None else None,
+                'h2h': h2h_hit if h2h_hit is not None else None,
+                'matchup': matchup_hit if matchup_hit is not None else None,
                 'ip': round(ip, 0) if ip else None,
                 'opp_rank': opp_rank,
                 'player_data': player
@@ -137,8 +211,12 @@ def render(predictions):
         if 'pred_assists' in player and 'line_assists' in player and 'assist_value' in player:
             line_ast = player['line_assists']
             pred_ast = player['pred_assists']
+            hit_3 = calculate_hit_rate(game_log, 'AST', line_ast, 3)
             hit_5 = calculate_hit_rate(game_log, 'AST', line_ast, 5)
+            hit_8 = calculate_hit_rate(game_log, 'AST', line_ast, 8)
             hit_10 = calculate_hit_rate(game_log, 'AST', line_ast, 10)
+            h2h_hit = calculate_h2h_hit_rate(tracker, player_name, opponent, 'AST', line_ast) if opponent else None
+            matchup_hit = calculate_matchup_hit_rate(tracker, player_name, opponent, 'AST', line_ast) if opponent else None
             ip = calculate_implied_probability(pred_ast, line_ast, 'assists')
             opp_rank = get_opponent_rank(opponent, 'assists')
             
@@ -151,8 +229,12 @@ def render(predictions):
                 'prediction': round(pred_ast, 1),
                 'line': line_ast,
                 'value': round(player['assist_value'], 2),
+                'hit_3': hit_3 if hit_3 is not None else None,
                 'hit_5': hit_5 if hit_5 is not None else None,
+                'hit_8': hit_8 if hit_8 is not None else None,
                 'hit_10': hit_10 if hit_10 is not None else None,
+                'h2h': h2h_hit if h2h_hit is not None else None,
+                'matchup': matchup_hit if matchup_hit is not None else None,
                 'ip': round(ip, 0) if ip else None,
                 'opp_rank': opp_rank,
                 'player_data': player
@@ -207,84 +289,51 @@ def render(predictions):
         is_over = row['value'] > 0
         bet_direction = "Over" if is_over else "Under"
         
-        # Card container
+        # Seamless table-like layout
         with st.container():
-            # Main card
-            card_col1, card_col2 = st.columns([3, 1])
-            
-            with card_col1:
-                # Player name and prop
-                st.markdown(f"**{row['player_name']} ({row['team']})**")
-                st.markdown(f"{bet_direction} {row['line']:.1f} {row['stat']}")
-            
-            with card_col2:
-                # Value score (styled)
-                value_color = "🟢" if row['value'] > 1.0 else "🟡" if row['value'] > 0 else "🔴"
-                st.markdown(f"{value_color} **{row['value']:+.2f}**")
-            
-            # Stats row
-            stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4)
-            
-            with stats_col1:
-                st.caption(f"**OPP RANK**")
-                # Show opponent rank if available (handle None, NaN, and numeric values)
-                opp_rank = row.get('opp_rank')
-                if opp_rank is not None and not pd.isna(opp_rank):
+            # Helper function to format percentage
+            def format_percentage(val):
+                if val is not None and not pd.isna(val):
                     try:
-                        opp_rank_display = f"{int(opp_rank)} {row['opponent']}"
+                        val_int = int(val)
+                        return f"{val_int}%"
                     except (ValueError, TypeError):
-                        opp_rank_display = f"— {row['opponent']}"
-                else:
-                    opp_rank_display = f"— {row['opponent']}"
-                st.write(opp_rank_display)
+                        return "—"
+                return "—"
             
-            with stats_col2:
-                st.caption(f"**IP**")
-                ip_val = row.get('ip')
-                if ip_val is not None and not pd.isna(ip_val):
-                    try:
-                        ip_display = f"{int(ip_val)}%"
-                    except (ValueError, TypeError):
-                        ip_display = "N/A"
-                else:
-                    ip_display = "N/A"
-                st.write(ip_display)
+            # Get all values
+            opp_rank = row.get('opp_rank')
+            try:
+                opp_rank_display = f"#{int(opp_rank)}" if opp_rank is not None and not pd.isna(opp_rank) else "—"
+            except (ValueError, TypeError):
+                opp_rank_display = "—"
+            ip_display = format_percentage(row.get('ip'))
+            l3_display = format_percentage(row.get('hit_3'))
+            l5_display = format_percentage(row.get('hit_5'))
+            l8_display = format_percentage(row.get('hit_8'))
+            l10_display = format_percentage(row.get('hit_10'))
+            h2h_display = format_percentage(row.get('h2h'))
+            matchup_display = format_percentage(row.get('matchup'))
+            value_color = "🟢" if row['value'] > 1.0 else "🟡" if row['value'] > 0 else "🔴"
             
-            with stats_col3:
-                st.caption(f"**L5**")
-                hit_5_val = row.get('hit_5')
-                if hit_5_val is not None and not pd.isna(hit_5_val):
-                    try:
-                        l5_display = f"{int(hit_5_val)}%"
-                        # Color code based on hit rate
-                        if hit_5_val >= 80:
-                            st.success(l5_display)
-                        elif hit_5_val >= 60:
-                            st.info(l5_display)
-                        else:
-                            st.write(l5_display)
-                    except (ValueError, TypeError):
-                        st.write("N/A")
-                else:
-                    st.write("N/A")
+            # Row 1: Player name
+            st.markdown(f"**{row['player_name']} ({row['team']})**")
             
-            with stats_col4:
-                st.caption(f"**L10**")
-                hit_10_val = row.get('hit_10')
-                if hit_10_val is not None and not pd.isna(hit_10_val):
-                    try:
-                        l10_display = f"{int(hit_10_val)}%"
-                        # Color code based on hit rate
-                        if hit_10_val >= 80:
-                            st.success(l10_display)
-                        elif hit_10_val >= 60:
-                            st.info(l10_display)
-                        else:
-                            st.write(l10_display)
-                    except (ValueError, TypeError):
-                        st.write("N/A")
-                else:
-                    st.write("N/A")
+            # Row 2: Stat/Prop
+            st.markdown(f"{bet_direction} {row['line']:.1f} {row['stat']}")
+            
+            # Row 3: All percentages in one row with | separator (two spaces on each side)
+            st.markdown(
+                f"IP: {ip_display}  |  "
+                f"L3: {l3_display}  |  "
+                f"L5: {l5_display}  |  "
+                f"L8: {l8_display}  |  "
+                f"L10: {l10_display}  |  "
+                f"H2H: {h2h_display}  |  "
+                f"Matchup: {matchup_display}  |  "
+                f"OPP: {opp_rank_display} {row['opponent']}  |  "
+                f"{value_color} **{row['value']:+.2f}**"
+            )
             
             # Show prediction factors if enabled
             if show_factors:
@@ -391,8 +440,10 @@ def render(predictions):
     
     # Download
     download_cols = ['player_name', 'team', 'opponent', 'stat', 'prediction', 'line', 
-                     'value', 'hit_5', 'hit_10', 'ip']
-    download_df = filtered_df[download_cols].copy()
+                     'value', 'hit_3', 'hit_5', 'hit_8', 'hit_10', 'h2h', 'matchup', 'ip']
+    # Only include columns that exist in the dataframe
+    available_cols = [col for col in download_cols if col in filtered_df.columns]
+    download_df = filtered_df[available_cols].copy()
     csv = download_df.to_csv(index=False)
     st.download_button("📥 Download Predictions (CSV)", csv, 
                       "nba_predictions.csv", "text/csv", use_container_width=True)
