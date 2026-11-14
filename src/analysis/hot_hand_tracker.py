@@ -1,17 +1,22 @@
+from __future__ import annotations
+
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from typing import Optional
 from nba_api.stats.static import players as static_players
 from nba_api.stats.endpoints import playergamelog
+from src.config.constants import CURRENT_SEASON, PREV_SEASON, SEASON_TYPE_REGULAR
 import os
 import time
-import warnings
 
 STAT_COL_MAP = {
     'points': 'PTS',
     'rebounds': 'REB',
     'assists': 'AST',
-    'threes': 'FG3M'
+    'threes': 'FG3M',
+    'steals': 'STL',
+    'blocks': 'BLK',
+    'turnovers': 'TOV',
 }
 
 class HotHandTracker:
@@ -22,10 +27,17 @@ class HotHandTracker:
     """
 
     def __init__(self, blend_mode: str = "mean", cache_dir: str = "data/cache"):
-        p1 = pd.read_csv('data/raw/player_stats_2024-25.csv')
-        p1['SEASON'] = '2024-25'
-        p2 = pd.read_csv('data/raw/player_stats_2025-26.csv')
-        p2['SEASON'] = '2025-26'
+        try:
+            from src.config.nba_seasons import PREV_NBA_SEASON, PRIMARY_NBA_SEASON
+        except Exception:
+            PREV_NBA_SEASON, PRIMARY_NBA_SEASON = "2025-26", "2026-27"
+        self.prev_season = PREV_NBA_SEASON
+        self.primary_season = PRIMARY_NBA_SEASON
+
+        p1 = pd.read_csv(f'data/raw/player_stats_{PREV_NBA_SEASON}.csv')
+        p1['SEASON'] = PREV_NBA_SEASON
+        p2 = pd.read_csv(f'data/raw/player_stats_{PRIMARY_NBA_SEASON}.csv')
+        p2['SEASON'] = PRIMARY_NBA_SEASON
         players_all = pd.concat([p1, p2], ignore_index=True)
 
         if blend_mode == "latest":
@@ -45,17 +57,43 @@ class HotHandTracker:
         self.cache_dir = cache_dir
         os.makedirs(self.cache_dir, exist_ok=True)
 
-        # Safe print for Streamlit (avoid BrokenPipeError)
-        try:
-            print("✅ Hot Hand Tracker loaded (two-season baselines)")
-            print(f"   {len(self.players)} players analyzed")
-            print("\n⚠️  NOTE: Using season-level data for hot-hand logic; gamelogs fetched on-demand for consistency")
-        except (BrokenPipeError, OSError):
-            # Streamlit context - print statements can cause pipe errors
-            pass
+        # Build player-ID lookup once at init (not lazily on every call)
+        self._pid_lookup = {p['full_name'].lower(): p['id'] for p in static_players.get_players()}
 
-    def get_player_baseline(self, player_name):
-        """Get player's blended season averages"""
+    def get_player_baseline(self, player_name, use_game_logs=True):
+        """
+        Get player's blended season averages.
+        
+        If use_game_logs=True, calculates from actual game logs for accuracy.
+        Falls back to CSV data if game logs unavailable.
+        """
+        # Try to get from game logs first (most accurate, up-to-date)
+        if use_game_logs:
+            try:
+                game_log = self.get_player_gamelog(player_name, season=self.primary_season, use_cache=True)
+                if game_log is not None and len(game_log) > 0 and 'PTS' in game_log.columns:
+                    # Calculate current season averages from game logs
+                    avg_pts = game_log['PTS'].mean() if 'PTS' in game_log.columns else 0
+                    avg_reb = game_log['REB'].mean() if 'REB' in game_log.columns else 0
+                    avg_ast = game_log['AST'].mean() if 'AST' in game_log.columns else 0
+                    avg_min = game_log['MIN'].mean() if 'MIN' in game_log.columns else 0
+                    games_played = len(game_log)
+                    
+                    # Get player info from CSV (for team, ID, etc.)
+                    player_csv = self.players[self.players['PLAYER_NAME'] == player_name]
+                    if len(player_csv) > 0:
+                        player_row = player_csv.iloc[0].copy()
+                        # Update with calculated averages from game logs
+                        player_row['PTS'] = avg_pts
+                        player_row['REB'] = avg_reb
+                        player_row['AST'] = avg_ast
+                        player_row['MIN'] = avg_min
+                        player_row['GP'] = games_played
+                        return player_row
+            except Exception:
+                pass  # Fall back to CSV data below
+        
+        # Fall back to CSV data
         player = self.players[self.players['PLAYER_NAME'] == player_name]
         if len(player) == 0:
             return None
@@ -65,16 +103,51 @@ class HotHandTracker:
     # Consistency: helper methods
     # ---------------------------
     def _lookup_player_id(self, player_name):
-        result = [p for p in static_players.get_players() if p['full_name'].lower() == player_name.lower()]
-        if not result:
-            result = [p for p in static_players.get_players() if player_name.lower() in p['full_name'].lower()]
-        return result[0]['id'] if result else None
+        key = player_name.lower()
+        pid = self._pid_lookup.get(key)
+        if pid:
+            return pid
+        for full, pid in self._pid_lookup.items():
+            if key in full:
+                return pid
+        return None
 
     def _player_log_cache_path(self, player_id, season):
         safe_season = season.replace('/', '-')
         return os.path.join(self.cache_dir, f"player_log_{player_id}_{safe_season}.csv")
 
-    def get_player_gamelog(self, player_name, season='2025-26', use_cache=True):
+    def _ensure_gamelog_stat_columns(self, df):
+        """Older caches may omit STL/BLK/TOV; add so H2H / prop splits don’t skip whole seasons."""
+        if df is None or len(df) == 0:
+            return df
+        for c in ("PTS", "REB", "AST", "FG3M", "STL", "BLK", "TOV"):
+            if c not in df.columns:
+                df[c] = np.nan
+        return df
+
+    def batch_load_gamelogs(self, player_names, season=None):
+        if season is None:
+            season = getattr(self, "primary_season", "2026-27")
+        """Pre-load game logs from disk cache for a batch of players at once.
+        Returns dict {player_name: DataFrame} for all found logs."""
+        result = {}
+        for name in player_names:
+            pid = self._lookup_player_id(name)
+            if pid is None:
+                continue
+            cache_path = self._player_log_cache_path(pid, season)
+            if os.path.exists(cache_path):
+                try:
+                    df = pd.read_csv(cache_path)
+                    if df is not None and len(df) > 0:
+                        result[name] = self._ensure_gamelog_stat_columns(df)
+                except Exception:
+                    pass
+        return result
+
+    def get_player_gamelog(self, player_name, season=None, use_cache=True):
+        if season is None:
+            season = getattr(self, "primary_season", "2026-27")
         """
         Fetch player's game log for the season. Caches to data/cache/.
         """
@@ -87,10 +160,26 @@ class HotHandTracker:
             try:
                 df = pd.read_csv(cache_path)
                 if df is not None and len(df) > 0:
-                    return df
+                    return self._ensure_gamelog_stat_columns(df)
                 # If cached file is empty, don't use it - fetch fresh
             except Exception:
                 pass
+
+        # Try BALLDONTLIE first when enabled (ALL-STAR: game player stats). Revert: unset BALLDONTLIE_API_KEY or BALLDONTLIE_ENABLED=0
+        try:
+            from src.services.balldontlie_client import get_player_gamelog_balldontlie, is_balldontlie_enabled
+            if is_balldontlie_enabled():
+                bdl_log = get_player_gamelog_balldontlie(player_name, season=season)
+                if bdl_log is not None and len(bdl_log) > 0:
+                    bdl_log = self._ensure_gamelog_stat_columns(bdl_log)
+                    if use_cache:
+                        try:
+                            bdl_log.to_csv(cache_path, index=False)
+                        except Exception:
+                            pass
+                    return bdl_log
+        except Exception:
+            pass
 
         # Fetch from NBA API with retry logic and timeout handling
         max_retries = 1  # Reduced to 1 retry for faster failure
@@ -101,7 +190,7 @@ class HotHandTracker:
                 logs = playergamelog.PlayerGameLog(
                     player_id=pid, 
                     season=season, 
-                    season_type_all_star='Regular Season'
+                    season_type_all_star=SEASON_TYPE_REGULAR
                 )
                 df = logs.get_data_frames()[0]
                 
@@ -110,10 +199,11 @@ class HotHandTracker:
                     break  # Success, exit retry loop
                 elif df is not None and len(df) == 0:
                     # Empty dataframe - season might not have started yet
-                    # Try previous season as fallback (only if current season is 2025-26)
-                    if season == '2025-26':
+                    # Try previous season as fallback when primary season has no rows yet
+                    if season == getattr(self, "primary_season", season):
                         try:
-                            logs_prev = playergamelog.PlayerGameLog(player_id=pid, season='2024-25', season_type_all_star='Regular Season')
+                            prev = getattr(self, "prev_season", PREV_SEASON)
+                            logs_prev = playergamelog.PlayerGameLog(player_id=pid, season=prev, season_type_all_star=SEASON_TYPE_REGULAR)
                             df_prev = logs_prev.get_data_frames()[0]
                             if df_prev is not None and len(df_prev) > 0:
                                 df = df_prev  # Use fallback data
@@ -137,9 +227,10 @@ class HotHandTracker:
                 # If it's the last attempt, try fallback then give up
                 if attempt >= max_retries:
                     # Quick fallback to previous season if current season fails
-                    if season == '2025-26':
+                    if season == getattr(self, "primary_season", season):
                         try:
-                            logs_prev = playergamelog.PlayerGameLog(player_id=pid, season='2024-25', season_type_all_star='Regular Season')
+                            prev = getattr(self, "prev_season", PREV_SEASON)
+                            logs_prev = playergamelog.PlayerGameLog(player_id=pid, season=prev, season_type_all_star=SEASON_TYPE_REGULAR)
                             df_prev = logs_prev.get_data_frames()[0]
                             if df_prev is not None and len(df_prev) > 0:
                                 df = df_prev  # Use fallback data
@@ -163,10 +254,11 @@ class HotHandTracker:
         if df is None or len(df) == 0:
             return None
         
-        wanted_cols = ['GAME_DATE', 'MATCHUP', 'PTS', 'REB', 'AST', 'FG3M']
+        wanted_cols = ['GAME_DATE', 'MATCHUP', 'PTS', 'REB', 'AST', 'FG3M', 'STL', 'BLK', 'TOV']
         for c in wanted_cols:
             if c not in df.columns:
                 df[c] = np.nan
+        df = self._ensure_gamelog_stat_columns(df)
         df = df.sort_values('GAME_DATE', ascending=False).reset_index(drop=True)
 
         # Only cache if we have actual data (don't cache empty dataframes)
@@ -178,17 +270,46 @@ class HotHandTracker:
 
         return df
 
-    def _parse_opponent_from_matchup(self, matchup_str, team_abbr=None):
+    def _parse_opponent_from_matchup(self, matchup_str):
         """
-        MATCHUP examples: 'BOS vs NYK', 'LAL @ GSW'
-        Extract and return opponent tricode.
+        MATCHUP examples: 'BOS vs NYK', 'LAL @ GSW', 'MIN vs. BOS' (NBA.com)
+        Extract opponent tricode (3rd token after normalizing 'vs.' → 'vs').
         """
         if not isinstance(matchup_str, str):
             return None
-        parts = matchup_str.split(' ')
+        s = matchup_str.strip()
+        if not s:
+            return None
+        norm = s.replace("vs.", "vs").replace("VS.", "vs")
+        parts = norm.split()
         if len(parts) >= 3:
-            return parts[2].strip()
-        return matchup_str[-3:].upper()
+            opp = parts[2].strip().upper()
+            if opp in ("OPP", "UNK") or len(opp) < 2:
+                return None
+            return opp[:8] if len(opp) > 8 else opp
+        if len(s) >= 3:
+            return s[-3:].upper()
+        return None
+
+    def get_player_current_team_from_gamelog(self, player_name: str, season: str = '2025-26') -> Optional[str]:
+        """
+        Get player's current team from their most recent game in game log.
+        Uses MATCHUP format: first team is the player's team (e.g. 'BOS @ NYK' -> BOS).
+        Helps correct for traded players when CSV/roster is stale.
+        """
+        df = self.get_player_gamelog(player_name, season=season, use_cache=True)
+        if df is None or len(df) == 0:
+            df = self.get_player_gamelog(player_name, season='2024-25', use_cache=True)
+        if df is None or len(df) == 0 or 'MATCHUP' not in df.columns:
+            return None
+        matchup = df.iloc[0].get('MATCHUP', '')
+        if not isinstance(matchup, str):
+            return None
+        parts = matchup.split()
+        # First token is always the player's team (e.g. "BOS @ DAL" or "BOS vs DAL")
+        if len(parts) >= 1 and len(parts[0]) == 3:
+            return parts[0].strip().upper()
+        return None
 
     def _calc_hit_rate(self, df, stat_type, line):
         col = STAT_COL_MAP.get(stat_type)
@@ -221,45 +342,82 @@ class HotHandTracker:
 
     def consistency_h2h(self, player_name, stat_type, line, opponent_tricode, season='2025-26'):
         """
-        Get H2H consistency. If current season has < 5 games, include previous season.
-        Returns last 5 H2H games total (prioritizing current season, then previous).
+        H2H vs opponent: pool up to three recent seasons, sort by date, take last 12 meetings.
+        Over = stat > line (aligned with Prop % H2H strict over).
         """
-        h2h_games = []
-        
-        # Try current season first
-        df_current = self.get_player_gamelog(player_name, season=season)
-        if df_current is not None and not df_current.empty:
-            df_current = df_current.copy()
-            df_current['OPP'] = df_current['MATCHUP'].apply(self._parse_opponent_from_matchup)
-            h2h_current = df_current[df_current['OPP'] == opponent_tricode]
-            if len(h2h_current) > 0:
-                h2h_games.append(h2h_current)
-        
-        # If we don't have at least 5 games, try previous season
-        total_h2h = len(h2h_games[0]) if h2h_games else 0
-        if total_h2h < 5:
-            prev_season = '2024-25' if season == '2025-26' else '2025-26'
-            df_prev = self.get_player_gamelog(player_name, season=prev_season)
-            if df_prev is not None and not df_prev.empty:
-                df_prev = df_prev.copy()
-                df_prev['OPP'] = df_prev['MATCHUP'].apply(self._parse_opponent_from_matchup)
-                h2h_prev = df_prev[df_prev['OPP'] == opponent_tricode]
-                if len(h2h_prev) > 0:
-                    h2h_games.append(h2h_prev)
-        
-        # Combine all H2H games and take last 5
-        if not h2h_games:
-            return {'player': player_name, 'scope': f'H2H vs {opponent_tricode}', 'stat': stat_type, 'line': line, 'games': 0, 'hits': 0, 'hit_rate': 0.0}
-        
-        h2h_combined = pd.concat(h2h_games, ignore_index=True)
-        # Sort by date descending (newest first), take last 5
-        if 'GAME_DATE' in h2h_combined.columns:
-            h2h_combined = h2h_combined.sort_values('GAME_DATE', ascending=False)
-        h2h_final = h2h_combined.head(5)
-        
-        rate = self._calc_hit_rate(h2h_final, stat_type, line)
-        rate.update({'player': player_name, 'scope': f'H2H vs {opponent_tricode} (last 5)', 'stat': stat_type, 'line': line})
-        return rate
+        opp_u = str(opponent_tricode).strip().upper()
+        season_roll = {
+            "2025-26": ("2025-26", "2024-25", "2023-24"),
+            "2024-25": ("2024-25", "2023-24", "2022-23"),
+        }.get(season, (season, "2024-25", "2023-24"))
+
+        pieces = []
+        for s in season_roll:
+            df_s = self.get_player_gamelog(player_name, season=s)
+            if df_s is None or df_s.empty or "MATCHUP" not in df_s.columns:
+                continue
+            d = df_s.copy()
+            d["OPP"] = d["MATCHUP"].apply(self._parse_opponent_from_matchup)
+            m = d["OPP"].notna()
+            d.loc[m, "OPP"] = d.loc[m, "OPP"].astype(str).str.strip().str.upper()
+            sub = d[d["OPP"] == opp_u]
+            if len(sub) > 0:
+                pieces.append(sub)
+
+        if not pieces:
+            return {
+                "player": player_name,
+                "scope": f"H2H vs {opponent_tricode}",
+                "stat": stat_type,
+                "line": line,
+                "games": 0,
+                "hits": 0,
+                "hit_rate": 0.0,
+            }
+
+        h2h_combined = pd.concat(pieces, ignore_index=True)
+        if "GAME_DATE" in h2h_combined.columns:
+            h2h_combined = h2h_combined.copy()
+            h2h_combined["_gd"] = pd.to_datetime(h2h_combined["GAME_DATE"], errors="coerce")
+            h2h_combined = h2h_combined.sort_values("_gd", ascending=False).drop(
+                columns=["_gd"], errors="ignore"
+            )
+        h2h_final = h2h_combined.head(12)
+
+        col = STAT_COL_MAP.get(stat_type)
+        if col is None or col not in h2h_final.columns:
+            return {
+                "player": player_name,
+                "scope": f"H2H vs {opponent_tricode}",
+                "stat": stat_type,
+                "line": line,
+                "games": 0,
+                "hits": 0,
+                "hit_rate": 0.0,
+            }
+        valid = h2h_final[pd.notna(h2h_final[col])]
+        games = len(valid)
+        if games == 0:
+            return {
+                "player": player_name,
+                "scope": f"H2H vs {opponent_tricode} (last 12)",
+                "stat": stat_type,
+                "line": line,
+                "games": 0,
+                "hits": 0,
+                "hit_rate": 0.0,
+            }
+        hits = int((valid[col].astype(float) > float(line)).sum())
+        hit_rate = hits / games if games else 0.0
+        return {
+            "player": player_name,
+            "scope": f"H2H vs {opponent_tricode} (last {games})",
+            "stat": stat_type,
+            "line": line,
+            "games": games,
+            "hits": hits,
+            "hit_rate": hit_rate,
+        }
 
     # ---------------------------
     # Existing hot-hand logic
@@ -455,10 +613,10 @@ if __name__ == "__main__":
         print(f"\n❌ {prediction['error']}")
         print(f"   {prediction['note']}")
     elif 'predicted_total' in prediction:
-        print(f"\n🔥 HOT START DETECTED!")
+        print("\n🔥 HOT START DETECTED!")
         print(f"   Player Type: {prediction['archetype']}")
         print(f"   Q1: {prediction['q1_actual']} points")
-        print(f"\n📈 Predicted Scoring:")
+        print("\n📈 Predicted Scoring:")
         print(f"   Q2: {prediction['predicted_q2']:.1f} points")
         print(f"   Q3: {prediction['predicted_q3']:.1f} points")
         print(f"   Q4: {prediction['predicted_q4']:.1f} points")
@@ -467,13 +625,13 @@ if __name__ == "__main__":
         print(f"   vs Average: {prediction['vs_average']:+.1f}")
         print(f"\n💪 Consistency Score: {prediction['consistency_score']:.0%}")
         print(f"   Confidence: {prediction['confidence']}")
-        
+
         if prediction['consistency_score'] < 0.4:
             print(f"\n⚠️  WARNING: {prediction['archetype']}s typically COOL OFF after hot starts")
-            print(f"   Consider betting UNDER on their total")
+            print("   Consider betting UNDER on their total")
         else:
             print(f"\n✅ {prediction['archetype']}s typically STAY HOT")
-            print(f"   Good OVER candidate")
+            print("   Good OVER candidate")
     else:
         print(f"\n{prediction['note']}")
     

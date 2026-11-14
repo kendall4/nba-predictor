@@ -1,0 +1,1 @@
+Not fetched — stats.nba.com timeout. App should use ESPN scoreboard fallback.

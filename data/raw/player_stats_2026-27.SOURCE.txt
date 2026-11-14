@@ -1,0 +1,4 @@
+TRIAL SOURCE: ESPN splits season=2027 (2026-27), All Splits perGame.
+stats.nba.com timed out from this network — NOT final.
+PLAYER_ID mapped to 2025-26 nba_api IDs by name when possible.
+rows=459 max_gp=13.0 median_gp=10.0

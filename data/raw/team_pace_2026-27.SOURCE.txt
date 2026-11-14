@@ -1,0 +1,2 @@
+PROVISIONAL: copied from team_pace_2025-26.csv because stats.nba.com timed out.
+Early-season prior only — replace when nba_api advanced team stats available.

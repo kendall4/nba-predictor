@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Optional
+
 from nba_api.stats.static import teams, players
 from nba_api.stats.endpoints import leaguegamefinder, playergamelog, teamgamelog, leaguedashteamstats
 import pandas as pd
@@ -5,24 +9,51 @@ import time
 
 class NBAStatsCollector:
     """Using nba_api - the most reliable free option"""
-    
-    def __init__(self, season='2025-26'):  # Last complete season for training
+
+    def __init__(
+        self,
+        season="2026-27",
+        api_timeout: float = 120,
+        retry_attempts: int = 4,
+        retry_base_sleep: float = 5,
+    ):
         print(f"🏀 NBA Stats Collector using nba_api")
         print(f"📅 Season: {season}")
         self.season = season
         self.delay = 0.6  # 600ms between requests to avoid rate limits
-    
+        # stats.nba.com often exceeds the library default (30s) under load
+        self.api_timeout = api_timeout
+        self.retry_attempts = max(1, int(retry_attempts))
+        self.retry_base_sleep = max(0.0, float(retry_base_sleep))
+
+    def _retry(self, label: str, fn, attempts: Optional[int] = None) -> object:
+        tries = self.retry_attempts if attempts is None else max(1, int(attempts))
+        last_err = None
+        for i in range(tries):
+            try:
+                return fn()
+            except Exception as e:
+                last_err = e
+                if i + 1 >= tries:
+                    break
+                wait = self.retry_base_sleep * (i + 1)
+                print(f"⚠️  {label} failed ({e}); retry in {wait}s ({i + 1}/{tries})")
+                time.sleep(wait)
+        raise last_err
+
     def get_season_games(self):
         """Get all games for the season"""
         print(f"\n📅 Getting {self.season} games...")
-        
-        # Get all season games
-        gamefinder = leaguegamefinder.LeagueGameFinder(
-            season_nullable=self.season,
-            season_type_nullable='Regular Season'
-        )
-        
-        games = gamefinder.get_data_frames()[0]
+
+        def _fetch():
+            gf = leaguegamefinder.LeagueGameFinder(
+                season_nullable=self.season,
+                season_type_nullable="Regular Season",
+                timeout=self.api_timeout,
+            )
+            return gf.get_data_frames()[0]
+
+        games = self._retry("LeagueGameFinder", _fetch)
         
         print(f"✅ Found {len(games)} total games this season")
         print("\nSample games:")
@@ -38,15 +69,17 @@ class NBAStatsCollector:
         print(f"\n🏃 Getting team PACE stats for {self.season}...")
         time.sleep(self.delay)
         
-        # Get advanced team stats with PACE
-        team_stats = leaguedashteamstats.LeagueDashTeamStats(
-            season=self.season,
-            season_type_all_star='Regular Season',
-            measure_type_detailed_defense='Advanced',
-            per_mode_detailed='PerGame'
-        )
-        
-        df = team_stats.get_data_frames()[0]
+        def _fetch():
+            ts = leaguedashteamstats.LeagueDashTeamStats(
+                season=self.season,
+                season_type_all_star="Regular Season",
+                measure_type_detailed_defense="Advanced",
+                per_mode_detailed="PerGame",
+                timeout=self.api_timeout,
+            )
+            return ts.get_data_frames()[0]
+
+        df = self._retry("LeagueDashTeamStats(Advanced)", _fetch)
         
         # Filter out WNBA teams (only keep NBA teams)
         nba_team_names = [
@@ -109,13 +142,16 @@ class NBAStatsCollector:
         
         from nba_api.stats.endpoints import leaguedashplayerstats
         
-        player_stats = leaguedashplayerstats.LeagueDashPlayerStats(
-            season=self.season,
-            season_type_all_star='Regular Season',
-            per_mode_detailed='PerGame'
-        )
-        
-        df = player_stats.get_data_frames()[0]
+        def _fetch():
+            ps = leaguedashplayerstats.LeagueDashPlayerStats(
+                season=self.season,
+                season_type_all_star="Regular Season",
+                per_mode_detailed="PerGame",
+                timeout=self.api_timeout,
+            )
+            return ps.get_data_frames()[0]
+
+        df = self._retry("LeagueDashPlayerStats", _fetch)
         
         print(f"✅ Got stats for {len(df)} players")
         print("\nTop 10 Scorers:")
@@ -148,13 +184,16 @@ class NBAStatsCollector:
             print(f"  Fetching {pos_name} defense...")
             time.sleep(self.delay)
             
-            defense = leaguedashptteamdefend.LeagueDashPtTeamDefend(
-                season=self.season,
-                season_type_all_star='Regular Season',
-                defense_category=pos_name
-            )
-            
-            df = defense.get_data_frames()[0]
+            def _fetch(p=pos_name):
+                d = leaguedashptteamdefend.LeagueDashPtTeamDefend(
+                    season=self.season,
+                    season_type_all_star="Regular Season",
+                    defense_category=p,
+                    timeout=self.api_timeout,
+                )
+                return d.get_data_frames()[0]
+
+            df = self._retry(f"LeagueDashPtTeamDefend({pos_name})", _fetch)
             df['POSITION_DEFENDED'] = pos_name
             all_defense.append(df)
         
