@@ -1219,7 +1219,16 @@ class MatchupFeatureBuilder:
                          'predicted_threes', 'predicted_steals', 'predicted_blocks', 'predicted_turnovers']:
             if pred_key in features:
                 pred_value = features[pred_key]
-                if not isinstance(pred_value, (int, float)) or pd.isna(pred_value) or pred_value < 0:
+                # Accept numpy scalars; reject None / NaN / non-finite
+                if pred_value is None:
+                    is_bad = True
+                else:
+                    try:
+                        pred_f = float(np.asarray(pred_value).reshape(-1)[0])
+                        is_bad = pred_f < 0 or not np.isfinite(pred_f)
+                    except (TypeError, ValueError, IndexError):
+                        is_bad = True
+                if is_bad:
                     # Log validation failure for debugging
                     validation_failures.append({
                         'stat': pred_key,

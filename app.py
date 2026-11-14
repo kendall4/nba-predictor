@@ -230,8 +230,8 @@ with st.sidebar:
     col1, col2 = st.columns(2)
     with col1:
         system_fit_weight = st.slider(
-            "System Fit Weight", 0.0, 1.0, 0.3, 0.1, 
-            help="How much offensive/defensive system profiles affect predictions. Higher = more weight on player-system fit."
+            "System Fit Weight", 0.0, 1.0, 0.0, 0.1,
+            help="How much offensive/defensive system profiles affect predictions. Higher = more weight on player-system fit. Default 0 while stats.nba.com is flaky."
         )
         st.caption("💡 Offensive style (pace, efficiency) + defensive matchup")
     
@@ -885,8 +885,11 @@ if _sport == "🏀 NBA":
                     progress_msg += " (form/H2H may call stats.nba.com — can hang if API is down)"
                 
                 with st.spinner(progress_msg):
+                    # Fast path: skip Odds API + teammate-out nba.com gamelog nudges
+                    # (those hang for minutes when stats.nba.com is down).
                     predictions_raw = analyzer.analyze_games(
-                        games, 
+                        games,
+                        odds_lines={},  # empty dict skips odds fetch; uses season-avg lines
                         target_date=selected_date,
                         system_fit_weight=system_fit_weight,
                         recent_form_weight=recent_form_weight,
@@ -894,7 +897,9 @@ if _sport == "🏀 NBA":
                         rest_days_weight=rest_days_weight,
                         home_away_weight=home_away_weight,
                         play_style_weight=play_style_weight,
-                        upside_weight=upside_weight
+                        upside_weight=upside_weight,
+                        apply_teammate_absence=False,
+                        apply_historical_teammate_nudge=False,
                     )
                     if predictions_raw is not None and len(predictions_raw) > 0:
                         predictions_raw = normalize_prediction_dataframe(predictions_raw)
